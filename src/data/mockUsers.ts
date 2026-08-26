@@ -10,13 +10,31 @@ export const mockUsers: User[] = [
     {
         id: '002',
         name: 'Amit',
-        role: 'operator',
+        role: 'admin',
         password: 'amit',
     },
     {
         id: '003',
         name: 'Agreev',
-        role: 'user',
+        role: 'admin',
         password: 'agreev',
+    },
+    {
+        id: '004',
+        name: 'Aditya',
+        role: 'admin',
+        password: 'aditya',
+    },
+    {
+        id: '005',
+        name: 'Priyanshu',
+        role: 'admin',
+        password: 'priyanshu',
+    },
+    {
+        id: '006',
+        name: 'Mritunjay',
+        role: 'admin',
+        password: 'mritunjay',
     },
 ];
