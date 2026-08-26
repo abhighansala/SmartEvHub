@@ -13,8 +13,8 @@ import { mockUsers } from '@/data/mockUsers';
 export const Login = () => {
   const navigate = useNavigate();
   const { login, showSnackbar } = useApp();
-  const [username, setUsername] = useState(mockUsers[0].name);
-  const [password, setPassword] = useState(mockUsers[0].password);
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -70,6 +70,7 @@ export const Login = () => {
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               autoFocus
+              autoComplete='off'
             />
             <TextField
               fullWidth
@@ -80,6 +81,7 @@ export const Login = () => {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               sx={{ mb: 4 }}
+              autoComplete='off'
             />
             <Button
               fullWidth
