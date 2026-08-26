@@ -1,0 +1,28 @@
+import type { EV } from '@/types';
+
+export const mockEVs: EV[] = [
+  { id: 'EV101', owner: 'Aditya Singh', model: 'Tata Nexon EV', batteryCapacity: 40.5, currentCharge: 45, status: 'charging', lastActivity: '2026-08-26T09:30:00', registeredAt: '2026-01-15T00:00:00' },
+  { id: 'EV102', owner: 'Priya Sharma', model: 'MG ZS EV', batteryCapacity: 50.3, currentCharge: 82, status: 'available', lastActivity: '2026-08-26T08:15:00', registeredAt: '2026-02-20T00:00:00' },
+  { id: 'EV103', owner: 'Rahul Patel', model: 'MG ZS EV', batteryCapacity: 50.3, currentCharge: 20, status: 'waiting', lastActivity: '2026-08-26T09:10:00', registeredAt: '2026-03-10T00:00:00' },
+  { id: 'EV104', owner: 'Sneha Reddy', model: 'Hyundai Kona EV', batteryCapacity: 39.2, currentCharge: 65, status: 'charging', lastActivity: '2026-08-26T08:45:00', registeredAt: '2026-01-25T00:00:00' },
+  { id: 'EV105', owner: 'Vikram Joshi', model: 'Tata Tigor EV', batteryCapacity: 26.0, currentCharge: 90, status: 'available', lastActivity: '2026-08-25T17:30:00', registeredAt: '2026-04-05T00:00:00' },
+  { id: 'EV106', owner: 'Ananya Gupta', model: 'Mahindra XUV400', batteryCapacity: 39.4, currentCharge: 55, status: 'charging', lastActivity: '2026-08-26T07:00:00', registeredAt: '2026-02-12T00:00:00' },
+  { id: 'EV107', owner: 'Karthik Nair', model: 'Hyundai Kona EV', batteryCapacity: 39.2, currentCharge: 30, status: 'waiting', lastActivity: '2026-08-26T08:50:00', registeredAt: '2026-05-18T00:00:00' },
+  { id: 'EV108', owner: 'Meera Iyer', model: 'BYD Atto 3', batteryCapacity: 60.5, currentCharge: 75, status: 'available', lastActivity: '2026-08-25T16:20:00', registeredAt: '2026-03-22T00:00:00' },
+  { id: 'EV109', owner: 'Arjun Kumar', model: 'Mahindra XUV400', batteryCapacity: 39.4, currentCharge: 15, status: 'waiting', lastActivity: '2026-08-26T09:00:00', registeredAt: '2026-06-01T00:00:00' },
+  { id: 'EV110', owner: 'Divya Mehta', model: 'Tata Nexon EV Max', batteryCapacity: 40.5, currentCharge: 60, status: 'available', lastActivity: '2026-08-25T18:45:00', registeredAt: '2026-04-15T00:00:00' },
+  { id: 'EV111', owner: 'Rohan Verma', model: 'Citroen eC3', batteryCapacity: 29.2, currentCharge: 40, status: 'charging', lastActivity: '2026-08-26T08:00:00', registeredAt: '2026-07-10T00:00:00' },
+  { id: 'EV112', owner: 'Nisha Das', model: 'BYD Atto 3', batteryCapacity: 60.5, currentCharge: 25, status: 'waiting', lastActivity: '2026-08-26T09:20:00', registeredAt: '2026-05-30T00:00:00' },
+  { id: 'EV113', owner: 'Sanjay Rao', model: 'Tata Punch EV', batteryCapacity: 35.0, currentCharge: 88, status: 'available', lastActivity: '2026-08-25T14:00:00', registeredAt: '2026-06-20T00:00:00' },
+  { id: 'EV114', owner: 'Pooja Mishra', model: 'MG Comet EV', batteryCapacity: 17.3, currentCharge: 70, status: 'available', lastActivity: '2026-08-25T12:30:00', registeredAt: '2026-07-05T00:00:00' },
+  { id: 'EV115', owner: 'Amit Saxena', model: 'Tata Nexon EV', batteryCapacity: 40.5, currentCharge: 35, status: 'swapping', lastActivity: '2026-08-26T09:15:00', registeredAt: '2026-08-01T00:00:00' },
+  { id: 'EV116', owner: 'Ritu Kapoor', model: 'Hyundai Ioniq 5', batteryCapacity: 72.6, currentCharge: 50, status: 'available', lastActivity: '2026-08-24T20:00:00', registeredAt: '2026-03-01T00:00:00' },
+  { id: 'EV117', owner: 'Deepak Tiwari', model: 'Tata Tigor EV', batteryCapacity: 26.0, currentCharge: 10, status: 'waiting', lastActivity: '2026-08-26T09:25:00', registeredAt: '2026-07-20T00:00:00' },
+  { id: 'EV118', owner: 'Kavita Bhat', model: 'Mahindra XUV400', batteryCapacity: 39.4, currentCharge: 95, status: 'available', lastActivity: '2026-08-25T19:00:00', registeredAt: '2026-04-28T00:00:00' },
+  { id: 'EV119', owner: 'Suresh Pandey', model: 'Citroen eC3', batteryCapacity: 29.2, currentCharge: 55, status: 'available', lastActivity: '2026-08-25T15:45:00', registeredAt: '2026-08-10T00:00:00' },
+  { id: 'EV120', owner: 'Lakshmi Narayan', model: 'BYD Seal', batteryCapacity: 82.5, currentCharge: 42, status: 'available', lastActivity: '2026-08-24T22:00:00', registeredAt: '2026-06-15T00:00:00' },
+  { id: 'EV121', owner: 'Manoj Deshmukh', model: 'Tata Nexon EV', batteryCapacity: 40.5, currentCharge: 68, status: 'available', lastActivity: '2026-08-25T11:00:00', registeredAt: '2026-05-10T00:00:00' },
+  { id: 'EV122', owner: 'Swati Kulkarni', model: 'MG ZS EV', batteryCapacity: 50.3, currentCharge: 78, status: 'available', lastActivity: '2026-08-25T13:30:00', registeredAt: '2026-07-25T00:00:00' },
+  { id: 'EV123', owner: 'Rajesh Agarwal', model: 'Hyundai Kona EV', batteryCapacity: 39.2, currentCharge: 33, status: 'available', lastActivity: '2026-08-25T10:00:00', registeredAt: '2026-08-15T00:00:00' },
+  { id: 'EV124', owner: 'Neha Chauhan', model: 'Tata Punch EV', batteryCapacity: 35.0, currentCharge: 85, status: 'available', lastActivity: '2026-08-25T09:00:00', registeredAt: '2026-08-20T00:00:00' },
+];
