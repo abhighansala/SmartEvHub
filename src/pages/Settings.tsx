@@ -23,33 +23,6 @@ export default function Settings() {
       <PageHeader title="Settings" subtitle="Configure application preferences" />
 
       <Grid container spacing={2.5}>
-        {/* Appearance */}
-        <Grid size={{ xs: 12, md: 6 }}>
-          <Card sx={{ p: 3, border: `1px solid ${theme.palette.divider}` }}>
-            <Typography variant="h5" sx={{ mb: 3 }}>Appearance</Typography>
-
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-              <Box>
-                <Typography variant="body1" fontWeight={500}>Dark Mode</Typography>
-                <Typography variant="body2" color="text.secondary">Switch between light and dark theme</Typography>
-              </Box>
-              <Switch checked={settings.themeMode === 'dark'} onChange={toggleTheme} />
-            </Box>
-
-            <Divider sx={{ my: 2 }} />
-
-            <Box>
-              <Typography variant="body1" fontWeight={500} sx={{ mb: 1 }}>Density</Typography>
-              <RadioGroup
-                value={settings.density}
-                onChange={e => updateSettings({ density: e.target.value as 'comfortable' | 'compact' })}
-              >
-                <FormControlLabel value="comfortable" control={<Radio size="small" />} label="Comfortable" />
-                <FormControlLabel value="compact" control={<Radio size="small" />} label="Compact" />
-              </RadioGroup>
-            </Box>
-          </Card>
-        </Grid>
 
         {/* Notifications */}
         <Grid size={{ xs: 12, md: 6 }}>
@@ -99,10 +72,23 @@ export default function Settings() {
                 <Typography variant="body2" color="text.secondary">
                   EV Charging & Battery-Swap Queue Management System
                 </Typography>
-                <Typography variant="caption" color="text.secondary">Version 1.0.0</Typography>
               </Box>
             </Box>
           </Card>
+
+          {/* Contributors */}
+          <Grid size={{ xs: 12 }} sx={{ marginTop: 2 }}>
+            <Card sx={{ p: 3, border: `1px solid ${theme.palette.divider}` }}>
+              <Typography variant="h5" sx={{ mb: 2 }}>Contributors :</Typography>
+              <Typography variant='h6' style={{ marginTop: 10 }}>
+                <ul style={{ listStyle: "none", paddingLeft: 0 }}>
+                  <li key="0" style={{ marginBottom: 8 }}>Abhishek Ghansala - Section 'H'</li>
+                  <li key="1" style={{ marginBottom: 8 }}>Amit Singh Kaintura - Section 'G'</li>
+                  <li key="2" style={{ marginBottom: 8 }}>Agreev Singh - Section 'F'</li>
+                </ul>
+              </Typography>
+            </Card>
+          </Grid>
         </Grid>
       </Grid>
     </Box>
