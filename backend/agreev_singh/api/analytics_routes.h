@@ -5,8 +5,15 @@
 #include <crow/middlewares/cors.h>
 #include "../services/transaction_service.h"
 
-// Registers Operational Reports and Recharts Analytics routes
-// Created by: Agreev Singh (Transactions + Reports + Analytics Owner, ID: 2518161)
+// ============================================================================
+// Smart EV Hub - Reports & Analytics REST API Endpoints
+// Module Owner: Agreev Singh (Transactions + Reports + Analytics, ID: 2518161)
+// ----------------------------------------------------------------------------
+// Exposes:
+// 1. GET /api/reports    - High-level KPI operational summaries for Reports cards
+// 2. GET /api/analytics  - Recharts-formatted datasets for weekly trends & stations
+// ============================================================================
+
 void registerAnalyticsRoutes(crow::App<crow::CORSHandler>& app, TransactionService& txnService);
 
-#endif
+#endif // ANALYTICS_ROUTES_H
