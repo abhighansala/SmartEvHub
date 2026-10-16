@@ -76,15 +76,18 @@ export default function Settings() {
             </Box>
           </Card>
 
-          {/* Contributors */}
+          {/* Team Members & Contributors */}
           <Grid size={{ xs: 12 }} sx={{ marginTop: 2 }}>
             <Card sx={{ p: 3, border: `1px solid ${theme.palette.divider}` }}>
-              <Typography variant="h5" sx={{ mb: 2 }}>Contributors :</Typography>
-              <Typography variant='h6' style={{ marginTop: 10 }}>
-                <ul style={{ listStyle: "none", paddingLeft: 0 }}>
-                  <li key="0" style={{ marginBottom: 8 }}>Abhishek Ghansala - Section 'H'</li>
-                  <li key="1" style={{ marginBottom: 8 }}>Amit Singh Kaintura - Section 'G'</li>
-                  <li key="2" style={{ marginBottom: 8 }}>Agreev Singh - Section 'F'</li>
+              <Typography variant="h5" sx={{ mb: 2 }}>Project Team Members (Equal Contribution):</Typography>
+              <Typography variant="body1" component="div" sx={{ mt: 1 }}>
+                <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0 }}>
+                  <li style={{ marginBottom: 10 }}><strong>Aditya Singh</strong> — 2519272 (ML1) • Team Lead (Database + Backend Foundation)</li>
+                  <li style={{ marginBottom: 10 }}><strong>Priyanshu Dutt</strong> — 2519460 (ML3) • EV Management Module Owner</li>
+                  <li style={{ marginBottom: 10 }}><strong>Mritunjay Thakur</strong> — 2519425 (ML5) • Charging Stations Module Owner</li>
+                  <li style={{ marginBottom: 10 }}><strong>Amit Singh Kaintura</strong> — 2518188 (G) • Battery & Swap Module Owner</li>
+                  <li style={{ marginBottom: 10 }}><strong>Abhishek Ghansala</strong> — 2518132 (H) • UI + DSA + Final Integration</li>
+                  <li style={{ marginBottom: 10 }}><strong>Agreev Singh</strong> — 2518161 (F) • Transactions + Reports + Analytics</li>
                 </ul>
               </Typography>
             </Card>

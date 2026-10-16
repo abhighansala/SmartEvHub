@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, type ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
 import type {
   User, EV, Station, Battery, ChargingSession, Transaction,
   ChargingRequest, SwapRequest, Notification, AppSettings,
@@ -10,6 +10,26 @@ import { mockSessions } from '@/data/mockSessions';
 import { mockTransactions } from '@/data/mockTransactions';
 import { mockChargingQueue, mockSwapQueue } from '@/data/mockQueues';
 import { mockNotifications } from '@/data/mockNotifications';
+import { api } from '@/services/api';
+
+// ============================================================================
+// Smart EV Hub - Central Application Context & State Management
+// Module Owner: Abhishek Ghansala (UI + DSA + Final Integration, ID: 2518132)
+// Manages operational state and synchronizes with C++ backend & manual DSA
+// ============================================================================
+
+export interface DSAMetadata {
+  frontIndex: number;
+  rearIndex: number;
+  size: number;
+  capacity: number;
+}
+
+export interface StackMetadata {
+  topIndex: number;
+  size: number;
+  capacity: number;
+}
 
 interface AppContextType {
   // State
@@ -22,6 +42,13 @@ interface AppContextType {
   swapQueue: SwapRequest[];
   notifications: Notification[];
   settings: AppSettings;
+
+  // Backend Integration & DSA Metadata (Abhishek Ghansala)
+  isBackendOnline: boolean;
+  chargingQueueMeta: DSAMetadata;
+  swapQueueMeta: DSAMetadata;
+  transactionStackMeta: StackMetadata;
+  refreshBackendData: () => Promise<void>;
 
   // EV CRUD
   addEV: (ev: Omit<EV, 'lastActivity' | 'registeredAt'>) => void;
@@ -36,15 +63,15 @@ interface AppContextType {
   updateBattery: (id: string, data: Partial<Battery>) => void;
 
   // Queue operations
-  processNextCharging: () => ChargingRequest | null;
+  processNextCharging: () => Promise<ChargingRequest | null>;
   removeChargingRequest: (id: string) => void;
   addChargingRequest: (req: Omit<ChargingRequest, 'id' | 'requestedAt'>) => void;
-  processNextSwap: () => SwapRequest | null;
+  processNextSwap: () => Promise<SwapRequest | null>;
   removeSwapRequest: (id: string) => void;
   addSwapRequest: (req: Omit<SwapRequest, 'id' | 'requestedAt'>) => void;
 
   // Session operations
-  completeSession: (sessionId: string) => Transaction | null;
+  completeSession: (sessionId: string) => Promise<Transaction | null>;
 
   // Notification operations
   markNotificationRead: (id: string) => void;
@@ -54,6 +81,7 @@ interface AppContextType {
   // Settings
   updateSettings: (settings: Partial<AppSettings>) => void;
   toggleTheme: () => void;
+
   // Auth
   isAuthenticated: boolean;
   currentUser: User | null;
@@ -86,6 +114,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
     notifications: { queueAlerts: true, sessionCompletion: true, stationAlerts: true },
   });
 
+  // Backend connection status and DSA states
+  const [isBackendOnline, setIsBackendOnline] = useState<boolean>(false);
+  const [chargingQueueMeta, setChargingQueueMeta] = useState<DSAMetadata>({
+    frontIndex: 0,
+    rearIndex: 1,
+    size: 2,
+    capacity: 20,
+  });
+  const [swapQueueMeta, setSwapQueueMeta] = useState<DSAMetadata>({
+    frontIndex: 0,
+    rearIndex: -1,
+    size: 0,
+    capacity: 20,
+  });
+  const [transactionStackMeta, setTransactionStackMeta] = useState<StackMetadata>({
+    topIndex: 2,
+    size: 3,
+    capacity: 50,
+  });
+
   const [snackbar, setSnackbar] = useState<AppContextType['snackbar']>({
     open: false, message: '', severity: 'success',
   });
@@ -110,27 +158,127 @@ export function AppProvider({ children }: { children: ReactNode }) {
     showSnackbar(`Welcome, ${user.name}`, 'success');
   }, [showSnackbar]);
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    try {
+      if (isBackendOnline) {
+        await api.logout();
+      }
+    } catch (e) {
+      // Ignore network errors on logout
+    }
     setCurrentUser(null);
     localStorage.removeItem('currentUser');
     showSnackbar('Logged out successfully', 'info');
-  }, [showSnackbar]);
+  }, [isBackendOnline, showSnackbar]);
 
-  // ─── EV CRUD ─────────────────────────────────────────────
-  const addEV = useCallback((ev: Omit<EV, 'lastActivity' | 'registeredAt'>) => {
-    const now = new Date().toISOString();
-    setEVs(prev => [...prev, { ...ev, lastActivity: now, registeredAt: now }]);
-    showSnackbar(`EV ${ev.id} registered successfully`);
-  }, [showSnackbar]);
+  // Synchronize with C++ Crow Backend on Startup
+  const refreshBackendData = useCallback(async () => {
+    try {
+      await api.checkHealth();
+      setIsBackendOnline(true);
 
-  const updateEV = useCallback((id: string, data: Partial<EV>) => {
-    setEVs(prev => prev.map(ev => ev.id === id ? { ...ev, ...data } : ev));
+      // Fetch live DSA Queue and Stack metadata from C++
+      const [cQueue, sQueue, tStack] = await Promise.all([
+        api.getChargingQueue().catch(() => null),
+        api.getSwapQueue().catch(() => null),
+        api.getTransactionStack().catch(() => null),
+      ]);
+
+      if (cQueue) {
+        setChargingQueueMeta({
+          frontIndex: cQueue.frontIndex,
+          rearIndex: cQueue.rearIndex,
+          size: cQueue.size,
+          capacity: cQueue.capacity,
+        });
+      }
+
+      if (sQueue) {
+        setSwapQueueMeta({
+          frontIndex: sQueue.frontIndex,
+          rearIndex: sQueue.rearIndex,
+          size: sQueue.size,
+          capacity: sQueue.capacity,
+        });
+      }
+
+      if (tStack) {
+        setTransactionStackMeta({
+          topIndex: tStack.topIndex,
+          size: tStack.size,
+          capacity: tStack.capacity,
+        });
+      }
+
+      // Fetch live entities from SQLite
+      const [backendEVs, backendStations, backendBatteries, backendTxns] = await Promise.all([
+        api.getEVs().catch(() => null),
+        api.getStations().catch(() => null),
+        api.getBatteries().catch(() => null),
+        api.getTransactions().catch(() => null),
+      ]);
+
+      if (backendEVs && Array.isArray(backendEVs) && backendEVs.length > 0) {
+        setEVs(backendEVs);
+      }
+      if (backendStations && Array.isArray(backendStations) && backendStations.length > 0) {
+        setStations(backendStations);
+      }
+      if (backendBatteries && Array.isArray(backendBatteries) && backendBatteries.length > 0) {
+        setBatteries(backendBatteries);
+      }
+      if (backendTxns && Array.isArray(backendTxns) && backendTxns.length > 0) {
+        setTransactions(backendTxns);
+      }
+    } catch (err) {
+      // Backend not running, stay in standalone prototype mode
+      setIsBackendOnline(false);
+    }
   }, []);
 
-  const deleteEV = useCallback((id: string) => {
+  useEffect(() => {
+    refreshBackendData();
+  }, [refreshBackendData]);
+
+  // ─── EV CRUD ─────────────────────────────────────────────
+  const addEV = useCallback(async (ev: Omit<EV, 'lastActivity' | 'registeredAt'>) => {
+    const now = new Date().toISOString();
+    const newEV = { ...ev, lastActivity: now, registeredAt: now };
+    setEVs(prev => [...prev, newEV]);
+    showSnackbar(`EV ${ev.id} registered successfully`);
+
+    // Persist to C++ backend if online
+    if (isBackendOnline) {
+      try {
+        await api.createEV(newEV);
+      } catch (e: any) {
+        console.error('Failed to sync EV to backend:', e.message);
+      }
+    }
+  }, [isBackendOnline, showSnackbar]);
+
+  const updateEV = useCallback(async (id: string, data: Partial<EV>) => {
+    setEVs(prev => prev.map(ev => ev.id === id ? { ...ev, ...data } : ev));
+    if (isBackendOnline) {
+      try {
+        await api.updateEV(id, data);
+      } catch (e) {
+        // silently fallback
+      }
+    }
+  }, [isBackendOnline]);
+
+  const deleteEV = useCallback(async (id: string) => {
     setEVs(prev => prev.filter(ev => ev.id !== id));
     showSnackbar(`EV ${id} removed`);
-  }, [showSnackbar]);
+    if (isBackendOnline) {
+      try {
+        await api.deleteEV(id);
+      } catch (e) {
+        // silently fallback
+      }
+    }
+  }, [isBackendOnline, showSnackbar]);
 
   // ─── Station ─────────────────────────────────────────────
   const updateStation = useCallback((id: string, data: Partial<Station>) => {
@@ -147,11 +295,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setBatteries(prev => prev.map(b => b.id === id ? { ...b, ...data } : b));
   }, []);
 
-  // ─── Charging Queue ──────────────────────────────────────
-  const processNextCharging = useCallback(() => {
+  // ─── Charging Queue (FIFO - Abhishek Ghansala DSA) ───────
+  const processNextCharging = useCallback(async () => {
     if (chargingQueue.length === 0) return null;
     const [first, ...rest] = chargingQueue;
     setChargingQueue(rest);
+
+    // Call manual C++ ChargingQueue dequeue endpoint if backend online
+    if (isBackendOnline) {
+      try {
+        const dsaRes = await api.dequeueCharging();
+        if (dsaRes) {
+          setChargingQueueMeta(prev => ({
+            ...prev,
+            frontIndex: dsaRes.frontIndex ?? prev.frontIndex,
+            rearIndex: dsaRes.rearIndex ?? prev.rearIndex,
+            size: dsaRes.remainingSize ?? Math.max(0, prev.size - 1),
+          }));
+        }
+      } catch (e) {
+        console.error('DSA Dequeue sync failed:', e);
+      }
+    }
 
     // Create a new session for the processed request
     const availableStation = stations.find(s => s.status === 'available');
@@ -181,32 +346,69 @@ export function AppProvider({ children }: { children: ReactNode }) {
       ));
       showSnackbar(`${first.evId} moved to ${availableStation.name} for charging`);
     } else {
-      showSnackbar(`${first.evId} removed from queue (no station available)`, 'warning');
+      showSnackbar(`${first.evId} dequeued (no station currently available)`, 'warning');
     }
     return first;
-  }, [chargingQueue, stations, showSnackbar]);
+  }, [chargingQueue, stations, isBackendOnline, showSnackbar]);
 
   const removeChargingRequest = useCallback((id: string) => {
     setChargingQueue(prev => prev.filter(r => r.id !== id));
     showSnackbar('Request removed from queue');
   }, [showSnackbar]);
 
-  const addChargingRequest = useCallback((req: Omit<ChargingRequest, 'id' | 'requestedAt'>) => {
-    setChargingQueue(prev => [...prev, {
+  const addChargingRequest = useCallback(async (req: Omit<ChargingRequest, 'id' | 'requestedAt'>) => {
+    const newReq: ChargingRequest = {
       ...req,
       id: nextId('CQ'),
       requestedAt: new Date().toISOString(),
-    }]);
-    showSnackbar(`${req.evId} added to charging queue`);
-  }, [showSnackbar]);
+    };
+    setChargingQueue(prev => [...prev, newReq]);
+    showSnackbar(`${req.evId} added to Charging Queue (REAR)`);
 
-  // ─── Swap Queue ──────────────────────────────────────────
-  const processNextSwap = useCallback(() => {
+    // Call manual C++ ChargingQueue enqueue endpoint if backend online
+    if (isBackendOnline) {
+      try {
+        const dsaRes = await api.enqueueCharging(req.evId);
+        if (dsaRes && dsaRes.success) {
+          setChargingQueueMeta(prev => ({
+            ...prev,
+            frontIndex: dsaRes.frontIndex ?? prev.frontIndex,
+            rearIndex: dsaRes.rearIndex ?? prev.rearIndex,
+            size: dsaRes.size ?? (prev.size + 1),
+          }));
+        }
+      } catch (e) {
+        console.error('DSA Enqueue sync failed:', e);
+      }
+    }
+  }, [isBackendOnline, showSnackbar]);
+
+  // ─── Swap Queue (FIFO - Abhishek Ghansala DSA) ───────────
+  const processNextSwap = useCallback(async () => {
     if (swapQueue.length === 0) return null;
     const [first, ...rest] = swapQueue;
     setSwapQueue(rest);
+
+    // Call manual C++ SwapQueue dequeue endpoint
+    if (isBackendOnline) {
+      try {
+        const dsaRes = await api.dequeueSwap();
+        if (dsaRes) {
+          setSwapQueueMeta(prev => ({
+            ...prev,
+            frontIndex: dsaRes.frontIndex ?? prev.frontIndex,
+            rearIndex: dsaRes.rearIndex ?? prev.rearIndex,
+            size: dsaRes.remainingSize ?? Math.max(0, prev.size - 1),
+          }));
+        }
+      } catch (e) {
+        console.error('Swap Queue sync failed:', e);
+      }
+    }
+
+    const txnId = nextId('TXN');
     const txn: Transaction = {
-      id: nextId('TXN'),
+      id: txnId,
       evId: first.evId,
       type: 'battery-swap',
       stationOrBattery: 'BAT-SWAP',
@@ -217,26 +419,59 @@ export function AppProvider({ children }: { children: ReactNode }) {
       status: 'completed',
     };
     setTransactions(prev => [txn, ...prev]);
+
+    // Push completed transaction to C++ LIFO Stack
+    if (isBackendOnline) {
+      try {
+        await api.pushTransactionStack(txnId);
+        setTransactionStackMeta(prev => ({
+          ...prev,
+          topIndex: prev.topIndex + 1,
+          size: prev.size + 1,
+        }));
+      } catch (e) {
+        console.error('Stack push sync failed:', e);
+      }
+    }
+
     showSnackbar(`Battery swap completed for ${first.evId}`);
     return first;
-  }, [swapQueue, showSnackbar]);
+  }, [swapQueue, isBackendOnline, showSnackbar]);
 
   const removeSwapRequest = useCallback((id: string) => {
     setSwapQueue(prev => prev.filter(r => r.id !== id));
     showSnackbar('Swap request removed');
   }, [showSnackbar]);
 
-  const addSwapRequest = useCallback((req: Omit<SwapRequest, 'id' | 'requestedAt'>) => {
-    setSwapQueue(prev => [...prev, {
+  const addSwapRequest = useCallback(async (req: Omit<SwapRequest, 'id' | 'requestedAt'>) => {
+    const newReq: SwapRequest = {
       ...req,
       id: nextId('SQ'),
       requestedAt: new Date().toISOString(),
-    }]);
-    showSnackbar(`${req.evId} added to swap queue`);
-  }, [showSnackbar]);
+    };
+    setSwapQueue(prev => [...prev, newReq]);
+    showSnackbar(`${req.evId} added to Swap Queue (REAR)`);
 
-  // ─── Sessions ────────────────────────────────────────────
-  const completeSession = useCallback((sessionId: string) => {
+    // Call manual C++ SwapQueue enqueue
+    if (isBackendOnline) {
+      try {
+        const dsaRes = await api.enqueueSwap(req.evId);
+        if (dsaRes && dsaRes.success) {
+          setSwapQueueMeta(prev => ({
+            ...prev,
+            frontIndex: dsaRes.frontIndex ?? prev.frontIndex,
+            rearIndex: dsaRes.rearIndex ?? prev.rearIndex,
+            size: dsaRes.size ?? (prev.size + 1),
+          }));
+        }
+      } catch (e) {
+        console.error('Swap queue enqueue sync failed:', e);
+      }
+    }
+  }, [isBackendOnline, showSnackbar]);
+
+  // ─── Sessions & Transactions (LIFO Stack - Abhishek DSA) ──
+  const completeSession = useCallback(async (sessionId: string) => {
     const session = sessions.find(s => s.id === sessionId);
     if (!session) return null;
 
@@ -258,8 +493,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     ));
 
     // Create transaction
+    const txnId = nextId('TXN');
     const txn: Transaction = {
-      id: nextId('TXN'),
+      id: txnId,
       evId: session.evId,
       type: 'charging',
       stationOrBattery: session.stationId,
@@ -270,9 +506,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
       status: 'completed',
     };
     setTransactions(prev => [txn, ...prev]);
-    showSnackbar(`Charging session for ${session.evId} completed — ₹${session.estimatedCost.toFixed(2)}`);
+
+    // Push new transaction onto C++ LIFO Stack & SQLite database
+    if (isBackendOnline) {
+      try {
+        await api.completeCharging(session.stationId);
+        await api.createTransaction(txn);
+        await api.pushTransactionStack(txnId);
+        setTransactionStackMeta(prev => ({
+          ...prev,
+          topIndex: prev.topIndex + 1,
+          size: prev.size + 1,
+        }));
+      } catch (e) {
+        console.error('Failed to sync completed session to backend:', e);
+      }
+    }
+
+    showSnackbar(`Charging session for ${session.evId} completed — ₹${session.estimatedCost.toFixed(2)} (Pushed to Stack)`);
     return txn;
-  }, [sessions, showSnackbar]);
+  }, [sessions, isBackendOnline, showSnackbar]);
 
   // ─── Notifications ───────────────────────────────────────
   const markNotificationRead = useCallback((id: string) => {
@@ -315,6 +568,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     <AppContext.Provider value={{
       evs, stations, batteries, sessions, transactions,
       chargingQueue, swapQueue, notifications, settings,
+      isBackendOnline, chargingQueueMeta, swapQueueMeta, transactionStackMeta,
+      refreshBackendData,
       isAuthenticated, currentUser, login, logout,
       addEV, updateEV, deleteEV,
       updateStation,

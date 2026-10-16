@@ -23,13 +23,13 @@ import { useApp } from '@/context/AppContext';
 
 export default function SwapQueue() {
   const theme = useTheme();
-  const { swapQueue, processNextSwap, removeSwapRequest } = useApp();
+  const { swapQueue, swapQueueMeta, processNextSwap, removeSwapRequest } = useApp();
 
   return (
     <Box>
       <PageHeader
         title="Battery Swap Queue"
-        subtitle="FIFO queue for battery swap requests — first in, first out"
+        subtitle="FIFO Circular Queue for battery swap requests — Abhishek Ghansala (UI + DSA Module)"
         action={
           <Button
             variant="contained"
@@ -37,18 +37,25 @@ export default function SwapQueue() {
             onClick={processNextSwap}
             disabled={swapQueue.length === 0}
           >
-            Process Next
+            Process Next (Dequeue)
           </Button>
         }
       />
 
-      {/* FIFO Label */}
+      {/* FIFO Label & C++ Queue Pointer State */}
       <Card sx={{ p: 2, mb: 3, border: `1px solid ${theme.palette.divider}`, bgcolor: alpha(theme.palette.primary.main, 0.04) }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <Chip label="FIFO" color="primary" size="small" sx={{ fontWeight: 700 }} />
-          <Typography variant="body2" color="text.secondary">
-            <strong>First In, First Out</strong> — The vehicle that requested a battery swap first will be processed first.
-          </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Chip label="C++ FIFO Swap Queue" color="primary" size="small" sx={{ fontWeight: 700 }} />
+            <Typography variant="body2" color="text.secondary">
+              <strong>First-In-First-Out</strong> — Manual C++ circular queue tracking battery swap requests
+            </Typography>
+          </Box>
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+            <Chip label={`FRONT Index: ${swapQueueMeta.frontIndex}`} size="small" color="success" variant="outlined" />
+            <Chip label={`REAR Index: ${swapQueueMeta.rearIndex}`} size="small" color="warning" variant="outlined" />
+            <Chip label={`Size: ${swapQueue.length} / ${swapQueueMeta.capacity}`} size="small" variant="outlined" />
+          </Box>
         </Box>
       </Card>
 

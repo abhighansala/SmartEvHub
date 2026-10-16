@@ -26,7 +26,7 @@ import { useApp } from '@/context/AppContext';
 
 export default function Transactions() {
   const theme = useTheme();
-  const { transactions } = useApp();
+  const { transactions, transactionStackMeta } = useApp();
   const [tab, setTab] = useState(0);
   const [search, setSearch] = useState('');
 
@@ -46,21 +46,25 @@ export default function Transactions() {
 
   return (
     <Box>
-      <PageHeader title="Transactions" subtitle="View charging and battery swap transaction history" />
+      <PageHeader title="Transactions" subtitle="View charging and battery swap transaction history — Abhishek Ghansala (UI + DSA Module)" />
 
       <Grid container spacing={2.5}>
         {/* Transaction Stack (LIFO) */}
         <Grid size={{ xs: 12, md: 4 }}>
           <Card sx={{ p: 3, border: `1px solid ${theme.palette.divider}`, height: '100%' }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-              <Typography variant="h5">Recent Transaction Stack</Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+              <Typography variant="h5">Transaction Stack</Typography>
+              <Chip label={`TOP: ${transactionStackMeta.topIndex}`} size="small" color="primary" variant="outlined" />
             </Box>
 
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-              <Chip label="LIFO" color="secondary" size="small" sx={{ fontWeight: 700 }} />
-              <Typography variant="caption" color="text.secondary">
-                <strong>Last In, First Out</strong> — Newest on top
-              </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', gap: 1 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Chip label="C++ LIFO Stack" color="secondary" size="small" sx={{ fontWeight: 700 }} />
+                <Typography variant="caption" color="text.secondary">
+                  <strong>Last In, First Out</strong> — Pure manual C++ stack
+                </Typography>
+              </Box>
+              <Chip label={`Capacity: ${transactionStackMeta.capacity}`} size="small" variant="outlined" />
             </Box>
 
             {/* Stack Visual */}

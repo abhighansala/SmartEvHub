@@ -24,7 +24,7 @@ import { useApp } from '@/context/AppContext';
 
 export default function ChargingQueue() {
   const theme = useTheme();
-  const { chargingQueue, processNextCharging, removeChargingRequest } = useApp();
+  const { chargingQueue, chargingQueueMeta, processNextCharging, removeChargingRequest } = useApp();
 
   const getWaitTime = (requestedAt: string) => {
     const diff = Date.now() - new Date(requestedAt).getTime();
@@ -35,7 +35,7 @@ export default function ChargingQueue() {
     <Box>
       <PageHeader
         title="Charging Queue"
-        subtitle="FIFO queue for charging requests — first in, first out"
+        subtitle="FIFO Circular Queue for charging requests — Abhishek Ghansala (UI + DSA Module)"
         action={
           <Button
             variant="contained"
@@ -43,18 +43,25 @@ export default function ChargingQueue() {
             onClick={processNextCharging}
             disabled={chargingQueue.length === 0}
           >
-            Process Next
+            Process Next (Dequeue)
           </Button>
         }
       />
 
-      {/* FIFO Label */}
+      {/* FIFO Label & C++ Queue Pointer State */}
       <Card sx={{ p: 2, mb: 3, border: `1px solid ${theme.palette.divider}`, bgcolor: alpha(theme.palette.primary.main, 0.04) }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <Chip label="FIFO" color="primary" size="small" sx={{ fontWeight: 700 }} />
-          <Typography variant="body2" color="text.secondary">
-            <strong>First In, First Out</strong> — The vehicle that requested charging first will be processed first.
-          </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Chip label="C++ FIFO Queue" color="primary" size="small" sx={{ fontWeight: 700 }} />
+            <Typography variant="body2" color="text.secondary">
+              <strong>First-In-First-Out</strong> — Pure manual C++ circular buffer implementation
+            </Typography>
+          </Box>
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+            <Chip label={`FRONT Index: ${chargingQueueMeta.frontIndex}`} size="small" color="success" variant="outlined" />
+            <Chip label={`REAR Index: ${chargingQueueMeta.rearIndex}`} size="small" color="warning" variant="outlined" />
+            <Chip label={`Size: ${chargingQueue.length} / ${chargingQueueMeta.capacity}`} size="small" variant="outlined" />
+          </Box>
         </Box>
       </Card>
 

@@ -11,6 +11,7 @@ import ListItemIcon from '@mui/material/ListItemIcon';
 import ListItemText from '@mui/material/ListItemText';
 import Divider from '@mui/material/Divider';
 import Button from '@mui/material/Button';
+import Chip from '@mui/material/Chip';
 import { useTheme, alpha } from '@mui/material/styles';
 
 import NotificationsOutlined from '@mui/icons-material/NotificationsOutlined';
@@ -43,7 +44,7 @@ interface TopBarProps {
 export default function TopBar({ onMenuClick, onSearchOpen, showMenuButton }: TopBarProps) {
   const theme = useTheme();
   const navigate = useNavigate();
-  const { notifications, markNotificationRead, markAllNotificationsRead, settings, toggleTheme } = useApp();
+  const { notifications, markNotificationRead, markAllNotificationsRead, settings, toggleTheme, isBackendOnline, refreshBackendData } = useApp();
   const [notifAnchor, setNotifAnchor] = useState<null | HTMLElement>(null);
 
   const unreadCount = notifications.filter(n => !n.read).length;
@@ -81,6 +82,18 @@ export default function TopBar({ onMenuClick, onSearchOpen, showMenuButton }: To
 
       {/* Right */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+        {/* Backend Server Status Indicator */}
+        <Tooltip title={isBackendOnline ? 'C++ Crow Backend Connected (Port 8080)' : 'C++ Backend Offline (Click to reconnect)'}>
+          <Chip
+            size="small"
+            label={isBackendOnline ? 'C++ Online' : 'Mock Mode'}
+            color={isBackendOnline ? 'success' : 'default'}
+            variant="outlined"
+            onClick={refreshBackendData}
+            sx={{ mr: 1, cursor: 'pointer', fontWeight: 600, fontSize: '0.75rem' }}
+          />
+        </Tooltip>
+
         {/* Search */}
         <Tooltip title="Search (Ctrl+K)">
           <IconButton onClick={onSearchOpen} aria-label="Search">

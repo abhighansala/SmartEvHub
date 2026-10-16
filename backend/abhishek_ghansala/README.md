@@ -41,30 +41,20 @@ abhishek_ghansala/
 
 ## 3. API Endpoints You Own
 
-### A. Charging Queue State
-- **Endpoint:** `GET /api/charging/queue`
-- **Response (HTTP 200):**
-  ```json
-  {
-    "frontIndex": 0,
-    "rearIndex": 1,
-    "size": 2,
-    "capacity": 20,
-    "items": ["EV-102", "EV-104"]
-  }
-  ```
+### A. Charging Queue (FIFO)
+- **State:** `GET /api/charging/queue`
+- **Enqueue EV:** `POST /api/charging/queue` (Body: `{"evId": "EV-102"}`)
+- **Process Next (Dequeue):** `POST /api/charging/dequeue`
 
-### B. Transaction Stack State
-- **Endpoint:** `GET /api/transactions/stack`
-- **Response (HTTP 200):**
-  ```json
-  {
-    "topIndex": 2,
-    "size": 3,
-    "capacity": 50,
-    "items": ["TXN-5003", "TXN-5002", "TXN-5001"]
-  }
-  ```
+### B. Swap Queue (FIFO)
+- **State:** `GET /api/swap/queue`
+- **Enqueue EV:** `POST /api/swap/queue` (Body: `{"evId": "EV-105"}`)
+- **Process Next (Dequeue):** `POST /api/swap/dequeue`
+
+### C. Transaction Stack (LIFO)
+- **State:** `GET /api/transactions/stack`
+- **Push Transaction:** `POST /api/transactions/stack` (Body: `{"id": "TXN-5004"}`)
+- **Pop Transaction:** `POST /api/transactions/stack/pop`
 
 ---
 
