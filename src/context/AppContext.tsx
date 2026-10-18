@@ -10,6 +10,7 @@ import { mockSessions } from '@/data/mockSessions';
 import { mockTransactions } from '@/data/mockTransactions';
 import { mockChargingQueue, mockSwapQueue } from '@/data/mockQueues';
 import { mockNotifications } from '@/data/mockNotifications';
+import { logoutUser } from '@/services/authService';
 
 interface AppContextType {
   // State
@@ -113,6 +114,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(() => {
     setCurrentUser(null);
     localStorage.removeItem('currentUser');
+    logoutUser().catch(() => {});
     showSnackbar('Logged out successfully', 'info');
   }, [showSnackbar]);
 

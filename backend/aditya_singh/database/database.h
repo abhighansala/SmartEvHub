@@ -5,8 +5,8 @@
 #include <string>
 #include <sqlite3.h>
 
-// Simple Database class to manage SQLite connection
-// Created by: Aditya Singh (Lead - Database & Backend Foundation)
+// Simple Database class to manage SQLite connection & CRUD foundation
+// Created by: Aditya Singh (Team Lead - Database & Backend Foundation)
 class Database {
 private:
     sqlite3* db;
@@ -16,7 +16,7 @@ public:
     // Constructor
     Database(const std::string& path = "evhub.db");
 
-    // Destructor - closes connection
+    // Destructor - safely closes connection
     ~Database();
 
     // Open connection to SQLite file
@@ -30,6 +30,15 @@ public:
 
     // Read and run SQL file (like schema.sql)
     bool initSchema(const std::string& schemaFilePath);
+
+    // Transaction Management Helpers
+    bool beginTransaction();
+    bool commitTransaction();
+    bool rollbackTransaction();
+
+    // Metadata & Helper queries
+    bool tableExists(const std::string& tableName);
+    long long getLastInsertId();
 
     // Check if database is open
     bool isOpen() const;

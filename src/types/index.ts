@@ -1,10 +1,11 @@
 // ─── Login Types ───────────────────────────────────────────────────────────
 
 export interface User {
-  id: string;
+  id: string | number;
   name: string;
+  email?: string;
   role: 'admin' | 'operator' | 'user';
-  password: string;
+  password?: string;
 }
 
 // ─── EV Types ────────────────────────────────────────────────────────────────

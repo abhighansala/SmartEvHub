@@ -109,8 +109,12 @@ CREATE TABLE IF NOT EXISTS TransactionLog (
 INSERT OR IGNORE INTO Users (id, name, email, password, role) VALUES
 (1, 'Admin User', 'admin@evhub.com', 'admin123', 'admin'),
 (2, 'Site Operator', 'operator@evhub.com', 'operator123', 'operator'),
-(3, 'Abhishek Ghansala', 'abhishek@evhub.com', 'abhi123', 'user'),
-(4, 'Aditya Singh', 'aditya@evhub.com', 'lead123', 'admin');
+(3, 'Abhishek Ghansala', 'abhishek@evhub.com', 'abhishek', 'admin'),
+(4, 'Aditya Singh', 'aditya@evhub.com', 'aditya', 'admin'),
+(5, 'Priyanshu Dutt', 'priyanshu@evhub.com', 'priyanshu', 'admin'),
+(6, 'Mritunjay Thakur', 'mritunjay@evhub.com', 'mritunjay', 'admin'),
+(7, 'Amit Singh Kaintura', 'amit@evhub.com', 'amit', 'admin'),
+(8, 'Agreev Singh', 'agreev@evhub.com', 'agreev', 'admin');
 
 -- Electric Vehicles
 INSERT OR IGNORE INTO EV (id, owner_name, model, battery_capacity, current_charge, status, last_activity) VALUES
