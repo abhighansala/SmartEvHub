@@ -114,11 +114,18 @@ export const Login = () => {
             </Typography>
             <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
               <Chip
+                label="Aditya (Lead): aditya@evhub.com"
+                size="small"
+                onClick={() => fillCredentials('aditya@evhub.com', 'aditya')}
+                clickable
+                color="primary"
+                variant="outlined"
+              />
+              <Chip
                 label="Admin: admin@evhub.com"
                 size="small"
                 onClick={() => fillCredentials('admin@evhub.com', 'admin123')}
                 clickable
-                color="primary"
                 variant="outlined"
               />
               <Chip
@@ -127,6 +134,13 @@ export const Login = () => {
                 onClick={() => fillCredentials('abhishek@evhub.com', 'abhi123')}
                 clickable
                 color="secondary"
+                variant="outlined"
+              />
+              <Chip
+                label="Operator: operator@evhub.com"
+                size="small"
+                onClick={() => fillCredentials('operator@evhub.com', 'operator123')}
+                clickable
                 variant="outlined"
               />
             </Box>

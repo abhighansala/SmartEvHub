@@ -18,10 +18,15 @@ bool Database::open() {
 
     int result = sqlite3_open(dbPath.c_str(), &db);
     if (result != SQLITE_OK) {
-        std::cout << "[Database Error] Could not open database: " << sqlite3_errmsg(db) << "\n";
+        std::cout << "[Database Error] Could not open database: " 
+                  << (db ? sqlite3_errmsg(db) : "Unknown error") << "\n";
         db = nullptr;
         return false;
     }
+
+    // Enable WAL journal mode and foreign keys for performance and data integrity
+    execute("PRAGMA foreign_keys = ON;");
+    execute("PRAGMA journal_mode = WAL;");
 
     std::cout << "[Database] Successfully connected to: " << dbPath << "\n";
     return true;
@@ -59,7 +64,7 @@ bool Database::execute(const std::string& sql) {
 bool Database::initSchema(const std::string& schemaFilePath) {
     std::ifstream file(schemaFilePath);
     if (!file.is_open()) {
-        std::cout << "[Database Error] Could not read file: " << schemaFilePath << "\n";
+        std::cout << "[Database Info] Could not read file: " << schemaFilePath << "\n";
         return false;
     }
 
@@ -69,6 +74,38 @@ bool Database::initSchema(const std::string& schemaFilePath) {
 
     std::cout << "[Database] Running schema file: " << schemaFilePath << "\n";
     return execute(sqlQueries);
+}
+
+bool Database::beginTransaction() {
+    return execute("BEGIN TRANSACTION;");
+}
+
+bool Database::commitTransaction() {
+    return execute("COMMIT;");
+}
+
+bool Database::rollbackTransaction() {
+    return execute("ROLLBACK;");
+}
+
+bool Database::tableExists(const std::string& tableName) {
+    if (db == nullptr) return false;
+
+    std::string sql = "SELECT name FROM sqlite_master WHERE type='table' AND name=?;";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK) {
+        return false;
+    }
+
+    sqlite3_bind_text(stmt, 1, tableName.c_str(), -1, SQLITE_STATIC);
+    bool exists = (sqlite3_step(stmt) == SQLITE_ROW);
+    sqlite3_finalize(stmt);
+    return exists;
+}
+
+long long Database::getLastInsertId() {
+    if (db == nullptr) return 0;
+    return (long long)sqlite3_last_insert_rowid(db);
 }
 
 bool Database::isOpen() const {
