@@ -11,6 +11,7 @@ import { mockTransactions } from '@/data/mockTransactions';
 import { mockChargingQueue, mockSwapQueue } from '@/data/mockQueues';
 import { mockNotifications } from '@/data/mockNotifications';
 import { logoutUser } from '@/services/authService';
+import { calculateChargingTime } from '@/utils/chargingCalc';
 
 interface AppContextType {
   // State
@@ -25,7 +26,7 @@ interface AppContextType {
   settings: AppSettings;
 
   // EV CRUD
-  addEV: (ev: Omit<EV, 'lastActivity' | 'registeredAt'>) => void;
+  addEV: (ev: Omit<EV, 'lastActivity' | 'registeredAt'>, options?: { autoCharge?: boolean; targetCharge?: number }) => void;
   updateEV: (id: string, data: Partial<EV>) => void;
   deleteEV: (id: string) => void;
 
@@ -118,12 +119,110 @@ export function AppProvider({ children }: { children: ReactNode }) {
     showSnackbar('Logged out successfully', 'info');
   }, [showSnackbar]);
 
+  // ─── Notifications ───────────────────────────────────────
+  const markNotificationRead = useCallback((id: string) => {
+    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+  }, []);
+
+  const markAllNotificationsRead = useCallback(() => {
+    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+  }, []);
+
+  const addNotification = useCallback((notification: Omit<Notification, 'id' | 'timestamp' | 'read'>) => {
+    setNotifications(prev => [{
+      ...notification,
+      id: nextId('N'),
+      timestamp: new Date().toISOString(),
+      read: false,
+    }, ...prev]);
+  }, []);
+
   // ─── EV CRUD ─────────────────────────────────────────────
-  const addEV = useCallback((ev: Omit<EV, 'lastActivity' | 'registeredAt'>) => {
+  const addEV = useCallback((
+    ev: Omit<EV, 'lastActivity' | 'registeredAt'>,
+    options?: { autoCharge?: boolean; targetCharge?: number }
+  ) => {
     const now = new Date().toISOString();
-    setEVs(prev => [...prev, { ...ev, lastActivity: now, registeredAt: now }]);
-    showSnackbar(`EV ${ev.id} registered successfully`);
-  }, [showSnackbar]);
+    const autoCharge = options?.autoCharge ?? (ev.currentCharge < 100);
+    const targetCharge = options?.targetCharge ?? 80;
+
+    // Check if an available charging station exists
+    const availableStation = autoCharge ? stations.find(s => s.status === 'available') : null;
+
+    if (availableStation && ev.currentCharge < targetCharge) {
+      // 1. Immediately assign to charging station
+      const newSessionId = nextId('SES');
+      const energyNeeded = Number((((targetCharge - ev.currentCharge) / 100) * ev.batteryCapacity).toFixed(2));
+      const estTime = calculateChargingTime(energyNeeded, availableStation.power);
+
+      const newSession: ChargingSession = {
+        id: newSessionId,
+        evId: ev.id,
+        evModel: ev.model,
+        stationId: availableStation.id,
+        startTime: now,
+        endTime: null,
+        batteryStart: ev.currentCharge,
+        batteryEnd: null,
+        targetCharge,
+        estimatedCost: Math.round(energyNeeded * 6.5 + 30),
+        status: 'active',
+      };
+
+      // Add EV with status 'charging'
+      setEVs(prev => [...prev, { ...ev, status: 'charging' as const, lastActivity: now, registeredAt: now }]);
+
+      // Mark station as 'charging'
+      setStations(prev => prev.map(s =>
+        s.id === availableStation.id
+          ? { ...s, status: 'charging' as const, currentEV: ev.id, sessionStart: now }
+          : s
+      ));
+
+      // Add to active sessions
+      setSessions(prev => [...prev, newSession]);
+
+      showSnackbar(
+        `EV ${ev.id} registered & auto-dispatched to ${availableStation.name} (${availableStation.power} kW)! Est. time to ${targetCharge}%: ~${estTime.formatted}.`,
+        'success'
+      );
+
+      addNotification({
+        message: `${ev.id} (${ev.model}) registered & auto-assigned to ${availableStation.name} (${availableStation.power} kW). Charging from ${ev.currentCharge}% to ${targetCharge}% (Est. ${estTime.formatted}).`,
+        type: 'success',
+        link: `/stations/${availableStation.id}`,
+      });
+    } else if (autoCharge && ev.currentCharge < targetCharge) {
+      // All stations currently occupied -> automatically add to Charging Queue
+      setEVs(prev => [...prev, { ...ev, status: 'waiting' as const, lastActivity: now, registeredAt: now }]);
+
+      const queueReq: ChargingRequest = {
+        id: nextId('CQ'),
+        evId: ev.id,
+        evModel: ev.model,
+        owner: ev.owner,
+        requestedAt: now,
+        currentCharge: ev.currentCharge,
+        priority: 'normal',
+      };
+      setChargingQueue(prev => [...prev, queueReq]);
+
+      showSnackbar(
+        `EV ${ev.id} registered! All stations occupied; automatically added to Charging Queue (Position #${chargingQueue.length + 1}).`,
+        'info'
+      );
+
+      addNotification({
+        message: `${ev.id} placed in Charging Queue (Position #${chargingQueue.length + 1}). Waiting for an available station.`,
+        type: 'info',
+        link: '/charging-queue',
+      });
+    } else {
+      // Standard registration without auto-charge
+      setEVs(prev => [...prev, { ...ev, lastActivity: now, registeredAt: now }]);
+      showSnackbar(`EV ${ev.id} registered successfully`);
+    }
+  }, [stations, chargingQueue.length, showSnackbar, addNotification]);
 
   const updateEV = useCallback((id: string, data: Partial<EV>) => {
     setEVs(prev => prev.map(ev => ev.id === id ? { ...ev, ...data } : ev));
@@ -237,24 +336,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     showSnackbar(`${req.evId} added to swap queue`);
   }, [showSnackbar]);
 
-  // ─── Notifications ───────────────────────────────────────
-  const markNotificationRead = useCallback((id: string) => {
-    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
-  }, []);
-
-  const markAllNotificationsRead = useCallback(() => {
-    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
-  }, []);
-
-  const addNotification = useCallback((notification: Omit<Notification, 'id' | 'timestamp' | 'read'>) => {
-    setNotifications(prev => [{
-      ...notification,
-      id: nextId('N'),
-      timestamp: new Date().toISOString(),
-      read: false,
-    }, ...prev]);
-  }, []);
-
   // ─── Real-Time Charging Simulation Engine ─────────────────
   // Simulates real-time physical battery charging for vehicles connected to active stations
   const notifiedTargets = useRef<Set<string>>(new Set());
@@ -308,23 +389,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     notifiedTargets.current.delete(sessionId);
 
-    // Remove from active sessions
-    setSessions(prev => prev.filter(s => s.id !== sessionId));
-
-    // Free the station
-    setStations(prev => prev.map(s =>
-      s.id === session.stationId
-        ? { ...s, status: 'available' as const, currentEV: null, sessionStart: null }
-        : s
-    ));
-
-    // Update EV status
-    setEVs(prev => prev.map(ev =>
-      ev.id === session.evId
-        ? { ...ev, status: 'available' as const, currentCharge: session.targetCharge, lastActivity: new Date().toISOString() }
-        : ev
-    ));
-
     // Create transaction with accurate energy delivered
     const ev = evs.find(e => e.id === session.evId);
     const capacity = ev?.batteryCapacity || 40.0;
@@ -343,9 +407,85 @@ export function AppProvider({ children }: { children: ReactNode }) {
       status: 'completed',
     };
     setTransactions(prev => [txn, ...prev]);
-    showSnackbar(`Charging session for ${session.evId} completed — ₹${session.estimatedCost.toFixed(2)}`);
+
+    // Check if there are vehicles waiting in queue to auto-dispatch to this freed station
+    if (chargingQueue.length > 0) {
+      const [nextReq, ...remainingQueue] = chargingQueue;
+      setChargingQueue(remainingQueue);
+
+      const nextSessionId = nextId('SES');
+      const queueEv = evs.find(e => e.id === nextReq.evId);
+      const cap = queueEv?.batteryCapacity || 40.0;
+      const targetCharge = 80;
+      const energyNeeded = Number((((targetCharge - nextReq.currentCharge) / 100) * cap).toFixed(2));
+      const station = stations.find(s => s.id === session.stationId);
+      const stationPower = station?.power || 25;
+      const estTime = calculateChargingTime(energyNeeded, stationPower);
+
+      const nextSession: ChargingSession = {
+        id: nextSessionId,
+        evId: nextReq.evId,
+        evModel: nextReq.evModel,
+        stationId: session.stationId,
+        startTime: new Date().toISOString(),
+        endTime: null,
+        batteryStart: nextReq.currentCharge,
+        batteryEnd: null,
+        targetCharge,
+        estimatedCost: Math.round(energyNeeded * 6.5 + 30),
+        status: 'active',
+      };
+
+      setSessions(prev => [...prev.filter(s => s.id !== sessionId), nextSession]);
+
+      setStations(prev => prev.map(s =>
+        s.id === session.stationId
+          ? { ...s, status: 'charging' as const, currentEV: nextReq.evId, sessionStart: new Date().toISOString() }
+          : s
+      ));
+
+      setEVs(prev => prev.map(item => {
+        if (item.id === session.evId) {
+          return { ...item, status: 'available' as const, currentCharge: session.targetCharge, lastActivity: new Date().toISOString() };
+        }
+        if (item.id === nextReq.evId) {
+          return { ...item, status: 'charging' as const, lastActivity: new Date().toISOString() };
+        }
+        return item;
+      }));
+
+      showSnackbar(
+        `Session completed! ${nextReq.evId} automatically moved from queue to ${station?.name || session.stationId} (~${estTime.formatted} at ${stationPower} kW).`,
+        'success'
+      );
+      addNotification({
+        message: `${nextReq.evId} (${nextReq.evModel}) automatically dispatched to ${station?.name || session.stationId} (${stationPower} kW). Est. charge time: ${estTime.formatted}.`,
+        type: 'info',
+        link: `/stations/${session.stationId}`,
+      });
+    } else {
+      // Remove from active sessions
+      setSessions(prev => prev.filter(s => s.id !== sessionId));
+
+      // Free the station
+      setStations(prev => prev.map(s =>
+        s.id === session.stationId
+          ? { ...s, status: 'available' as const, currentEV: null, sessionStart: null }
+          : s
+      ));
+
+      // Update EV status
+      setEVs(prev => prev.map(item =>
+        item.id === session.evId
+          ? { ...item, status: 'available' as const, currentCharge: session.targetCharge, lastActivity: new Date().toISOString() }
+          : item
+      ));
+
+      showSnackbar(`Charging session for ${session.evId} completed — ₹${session.estimatedCost.toFixed(2)}`);
+    }
+
     return txn;
-  }, [sessions, evs, showSnackbar]);
+  }, [sessions, evs, stations, chargingQueue, showSnackbar, addNotification]);
 
   // ─── Settings ────────────────────────────────────────────
   const updateSettings = useCallback((newSettings: Partial<AppSettings>) => {

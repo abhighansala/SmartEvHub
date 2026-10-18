@@ -20,6 +20,7 @@ import BatteryChargingFullOutlined from '@mui/icons-material/BatteryChargingFull
 import PageHeader from '@/components/common/PageHeader';
 import EmptyState from '@/components/common/EmptyState';
 import { useApp } from '@/context/AppContext';
+import { calculateChargingTime } from '@/utils/chargingCalc';
 
 export default function ActiveSessions() {
   const theme = useTheme();
@@ -77,6 +78,7 @@ export default function ActiveSessions() {
                   <TableCell>Start</TableCell>
                   <TableCell sx={{ minWidth: 200 }}>Battery Progress</TableCell>
                   <TableCell align="right">Target</TableCell>
+                  <TableCell>Est. Remaining</TableCell>
                   <TableCell>Duration</TableCell>
                   <TableCell align="right">Est. Cost</TableCell>
                   <TableCell align="center">Actions</TableCell>
@@ -86,10 +88,15 @@ export default function ActiveSessions() {
                 {sessions.map(s => {
                   const ev = evs.find(e => e.id === s.evId);
                   const station = stations.find(st => st.id === s.stationId);
+                  const stationPower = station?.power || 25;
                   const currentProgress = ev ? ev.currentCharge : s.batteryStart;
                   const deliveredKwh = ev
                     ? Math.round(Math.max(0, ((currentProgress - s.batteryStart) / 100) * ev.batteryCapacity) * 10) / 10
                     : 0;
+                  const remainingKwh = ev
+                    ? Math.max(0, Number((((s.targetCharge - currentProgress) / 100) * ev.batteryCapacity).toFixed(1)))
+                    : 0;
+                  const estTimeRemaining = calculateChargingTime(remainingKwh, stationPower);
                   const isTargetReached = currentProgress >= s.targetCharge;
 
                   return (
@@ -145,6 +152,20 @@ export default function ActiveSessions() {
                           color={isTargetReached ? 'success' : 'default'}
                           variant={isTargetReached ? 'filled' : 'outlined'}
                         />
+                      </TableCell>
+                      <TableCell>
+                        {isTargetReached ? (
+                          <Chip label="Ready" size="small" color="success" sx={{ fontWeight: 700 }} />
+                        ) : (
+                          <Box>
+                            <Typography variant="body2" fontWeight={700} color="primary.main">
+                              ~{estTimeRemaining.formatted}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              @ {stationPower} kW/hr
+                            </Typography>
+                          </Box>
+                        )}
                       </TableCell>
                       <TableCell>{getDuration(s.startTime)}</TableCell>
                       <TableCell align="right" sx={{ fontWeight: 500 }}>₹{s.estimatedCost.toFixed(2)}</TableCell>

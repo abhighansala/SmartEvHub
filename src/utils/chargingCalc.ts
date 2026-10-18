@@ -56,6 +56,29 @@ export function calculateChargingTime(
 }
 
 /**
+ * Calculates charging time range specifically for 25 kW to 29 kW delivery rates.
+ * (e.g. 25-29 kW per hour)
+ */
+export function calculateTimeRange25to29kW(energyKwh: number): {
+  minFormatted: string;
+  maxFormatted: string;
+  rangeFormatted: string;
+} {
+  const at29 = calculateChargingTime(energyKwh, 29);
+  const at25 = calculateChargingTime(energyKwh, 25);
+
+  const rangeFormatted = at29.formatted === at25.formatted
+    ? `~${at25.formatted}`
+    : `~${at29.formatted} – ${at25.formatted}`;
+
+  return {
+    minFormatted: at29.formatted,
+    maxFormatted: at25.formatted,
+    rangeFormatted,
+  };
+}
+
+/**
  * Calculates clean, realistic queue wait time.
  * Prevents absurd display of stale dates (e.g. 76547 min).
  */

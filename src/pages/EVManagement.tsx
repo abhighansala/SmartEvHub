@@ -18,30 +18,36 @@ import DialogContent from '@mui/material/DialogContent';
 import DialogActions from '@mui/material/DialogActions';
 import MenuItem from '@mui/material/MenuItem';
 import InputAdornment from '@mui/material/InputAdornment';
-import { useTheme } from '@mui/material/styles';
+import FormControlLabel from '@mui/material/FormControlLabel';
+import Switch from '@mui/material/Switch';
+import Typography from '@mui/material/Typography';
+import { useTheme, alpha } from '@mui/material/styles';
 
 import AddOutlined from '@mui/icons-material/AddOutlined';
 import SearchOutlined from '@mui/icons-material/SearchOutlined';
 import VisibilityOutlined from '@mui/icons-material/VisibilityOutlined';
 import EditOutlined from '@mui/icons-material/EditOutlined';
 import DeleteOutline from '@mui/icons-material/DeleteOutline';
+import ElectricBoltOutlined from '@mui/icons-material/ElectricBoltOutlined';
 
 import PageHeader from '@/components/common/PageHeader';
 import StatusChip from '@/components/common/StatusChip';
 import ConfirmDialog from '@/components/common/ConfirmDialog';
 import EmptyState from '@/components/common/EmptyState';
 import { useApp } from '@/context/AppContext';
+import { calculateRequiredEnergy, calculateTimeRange25to29kW } from '@/utils/chargingCalc';
 import type { EV, EVStatus } from '@/types';
 
 export default function EVManagement() {
   const theme = useTheme();
   const navigate = useNavigate();
-  const { evs, addEV, deleteEV, updateEV } = useApp();
+  const { evs, stations, addEV, deleteEV, updateEV } = useApp();
 
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [formOpen, setFormOpen] = useState(false);
   const [editEV, setEditEV] = useState<EV | null>(null);
+  const [autoCharge, setAutoCharge] = useState(true);
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
   // Form state
@@ -72,6 +78,7 @@ export default function EVManagement() {
     } else {
       setEditEV(null);
       setFormData({ id: '', owner: '', model: '', batteryCapacity: '', currentCharge: '' });
+      setAutoCharge(true);
     }
     setFormErrors({});
     setFormOpen(true);
@@ -95,20 +102,20 @@ export default function EVManagement() {
     if (!validate()) return;
     if (editEV) {
       updateEV(editEV.id, {
-        owner: formData.owner,
-        model: formData.model,
+        owner: formData.owner.trim(),
+        model: formData.model.trim(),
         batteryCapacity: Number(formData.batteryCapacity),
         currentCharge: Number(formData.currentCharge),
       });
     } else {
       addEV({
-        id: formData.id,
-        owner: formData.owner,
-        model: formData.model,
+        id: formData.id.trim(),
+        owner: formData.owner.trim(),
+        model: formData.model.trim(),
         batteryCapacity: Number(formData.batteryCapacity),
         currentCharge: Number(formData.currentCharge),
         status: 'available' as EVStatus,
-      });
+      }, { autoCharge });
     }
     setFormOpen(false);
   };
@@ -266,6 +273,83 @@ export default function EVManagement() {
             required
             slotProps={{ htmlInput: { min: 0, max: 100 } }}
           />
+
+          {/* Real-time Charging Time & Station Availability Preview */}
+          {!editEV && (() => {
+            const capVal = Number(formData.batteryCapacity);
+            const chargeVal = Number(formData.currentCharge);
+            const isValidCalc = !isNaN(capVal) && capVal > 0 && !isNaN(chargeVal) && chargeVal >= 0 && chargeVal <= 100;
+            const energyNeeded = isValidCalc ? calculateRequiredEnergy(capVal, chargeVal, 80) : 0;
+            const timeEst = isValidCalc ? calculateTimeRange25to29kW(energyNeeded) : null;
+            const availableStation = stations.find(s => s.status === 'available');
+
+            if (!isValidCalc || chargeVal >= 100) return null;
+
+            return (
+              <Box
+                sx={{
+                  p: 2,
+                  borderRadius: 2,
+                  bgcolor: alpha(theme.palette.primary.main, 0.05),
+                  border: `1px solid ${alpha(theme.palette.primary.main, 0.2)}`,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 1,
+                }}
+              >
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <ElectricBoltOutlined color="primary" fontSize="small" />
+                  <Typography variant="subtitle2" fontWeight={700} color="primary.main">
+                    Charging Duration (at 25–29 kW/hr Rate)
+                  </Typography>
+                </Box>
+
+                <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <Typography variant="caption" color="text.secondary">Energy to 80% Target:</Typography>
+                  <Typography variant="caption" fontWeight={600}>{energyNeeded} kWh</Typography>
+                </Box>
+
+                <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <Typography variant="caption" color="text.secondary">Est. Charging Time (25–29 kW):</Typography>
+                  <Typography variant="caption" fontWeight={700} color="primary.main">
+                    {timeEst?.rangeFormatted}
+                  </Typography>
+                </Box>
+
+                <Box sx={{ mt: 0.5, pt: 1, borderTop: `1px solid ${alpha(theme.palette.divider, 0.6)}` }}>
+                  {availableStation ? (
+                    <Typography variant="caption" color="success.main" fontWeight={600} sx={{ display: 'block' }}>
+                      ✓ {availableStation.name} ({availableStation.power} kW) is AVAILABLE. Vehicle will automatically begin charging immediately!
+                    </Typography>
+                  ) : (
+                    <Typography variant="caption" color="warning.main" fontWeight={600} sx={{ display: 'block' }}>
+                      ℹ All stations are currently charging. Vehicle will automatically join the Charging Queue.
+                    </Typography>
+                  )}
+                </Box>
+
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={autoCharge}
+                      onChange={e => setAutoCharge(e.target.checked)}
+                      color="primary"
+                      size="small"
+                    />
+                  }
+                  label={
+                    <Box>
+                      <Typography variant="body2" fontWeight={600}>Auto-dispatch to Charging Station</Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        Automatically routes EV to an available 25–29 kW station upon registration
+                      </Typography>
+                    </Box>
+                  }
+                  sx={{ mt: 0.5 }}
+                />
+              </Box>
+            );
+          })()}
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={() => setFormOpen(false)}>Cancel</Button>

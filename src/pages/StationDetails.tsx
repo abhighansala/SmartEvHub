@@ -17,6 +17,7 @@ import PageHeader from '@/components/common/PageHeader';
 import StatusChip from '@/components/common/StatusChip';
 import EmptyState from '@/components/common/EmptyState';
 import { useApp } from '@/context/AppContext';
+import { calculateChargingTime } from '@/utils/chargingCalc';
 
 export default function StationDetails() {
   const { id } = useParams<{ id: string }>();
@@ -49,6 +50,11 @@ export default function StationDetails() {
   };
 
   const progress = ev ? ev.currentCharge : (session ? session.batteryStart : 0);
+  const targetCharge = session ? session.targetCharge : 80;
+  const remainingKwh = ev && session
+    ? Math.max(0, Number((((targetCharge - progress) / 100) * ev.batteryCapacity).toFixed(1)))
+    : 0;
+  const estRemainingTime = calculateChargingTime(remainingKwh, station.power);
   const deliveredKwh = ev && session
     ? Math.round(Math.max(0, ((progress - session.batteryStart) / 100) * ev.batteryCapacity) * 10) / 10
     : 0;
@@ -74,7 +80,7 @@ export default function StationDetails() {
               {[
                 ['Station ID', station.id],
                 ['Name', station.name],
-                ['Power Output', `${station.power} kW`],
+                ['Power Output', `${station.power} kW (${station.power} kWh/hr Rate)`],
                 ['Connector', station.connectorType],
                 ['Location', station.location],
               ].map(([label, value]) => (
@@ -133,7 +139,7 @@ export default function StationDetails() {
                     }}
                   />
                   <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5, fontWeight: 500 }}>
-                    Target: {session.targetCharge}% • Started at {session.batteryStart}% • Power Rate: {station.power} kW
+                    Target: {session.targetCharge}% • Started at {session.batteryStart}% • Power Rate: {station.power} kW ({station.power} kWh/hr delivery)
                   </Typography>
                 </Box>
 
@@ -142,13 +148,19 @@ export default function StationDetails() {
                     <Typography variant="h5" fontWeight={700}>{session.evId}</Typography>
                     <Typography variant="caption" color="text.secondary">{ev?.model || 'Vehicle'}</Typography>
                   </Box>
+                  <Box sx={{ textAlign: 'center', minWidth: 100 }}>
+                    <Typography variant="h5" fontWeight={700} color={isTargetReached ? 'success.main' : 'primary.main'}>
+                      {isTargetReached ? '✓ Complete' : `~${estRemainingTime.formatted}`}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">Est. Time Remaining</Typography>
+                  </Box>
                   <Box sx={{ textAlign: 'center', minWidth: 90 }}>
                     <Typography variant="h5" fontWeight={700} color="info.main">+{deliveredKwh} kWh</Typography>
                     <Typography variant="caption" color="text.secondary">Delivered Energy</Typography>
                   </Box>
                   <Box sx={{ textAlign: 'center', minWidth: 90 }}>
                     <Typography variant="h5" fontWeight={700}>{getDuration(session.startTime)}</Typography>
-                    <Typography variant="caption" color="text.secondary">Duration</Typography>
+                    <Typography variant="caption" color="text.secondary">Elapsed Time</Typography>
                   </Box>
                   <Box sx={{ textAlign: 'center', minWidth: 90 }}>
                     <Typography variant="h5" fontWeight={700}>₹{session.estimatedCost.toFixed(0)}</Typography>

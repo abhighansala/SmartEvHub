@@ -15,6 +15,7 @@ import ElectricBoltOutlined from '@mui/icons-material/ElectricBoltOutlined';
 import PageHeader from '@/components/common/PageHeader';
 import StatusChip from '@/components/common/StatusChip';
 import { useApp } from '@/context/AppContext';
+import { calculateChargingTime } from '@/utils/chargingCalc';
 
 export default function ChargingStations() {
   const theme = useTheme();
@@ -53,6 +54,13 @@ export default function ChargingStations() {
           const deliveredKwh = ev && session
             ? Math.round(Math.max(0, ((currentProgress - session.batteryStart) / 100) * ev.batteryCapacity) * 10) / 10
             : 0;
+
+          const targetCharge = session ? session.targetCharge : 80;
+          const remainingKwh = ev
+            ? Math.max(0, Number((((targetCharge - currentProgress) / 100) * ev.batteryCapacity).toFixed(1)))
+            : 0;
+          const estRemainingTime = calculateChargingTime(remainingKwh, station.power);
+          const isTargetReached = currentProgress >= targetCharge;
 
           return (
             <Grid key={station.id} size={{ xs: 12, sm: 6, lg: 4 }}>
@@ -120,15 +128,25 @@ export default function ChargingStations() {
                         mt: 1,
                         p: 1.5,
                         borderRadius: 2,
-                        bgcolor: alpha(theme.palette.info.main, 0.08),
-                        border: `1px solid ${alpha(theme.palette.info.main, 0.2)}`,
+                        bgcolor: alpha(isTargetReached ? theme.palette.success.main : theme.palette.info.main, 0.08),
+                        border: `1px solid ${alpha(isTargetReached ? theme.palette.success.main : theme.palette.info.main, 0.2)}`,
                       }}
                     >
                       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.75 }}>
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                          <ElectricBoltOutlined sx={{ fontSize: 16, color: theme.palette.info.main, animation: 'pulse 1.5s infinite' }} />
-                          <Typography variant="caption" fontWeight={700} color="info.main">
-                            Live Charging Progress
+                          <ElectricBoltOutlined
+                            sx={{
+                              fontSize: 16,
+                              color: isTargetReached ? theme.palette.success.main : theme.palette.info.main,
+                              animation: isTargetReached ? 'none' : 'pulse 1.5s infinite',
+                            }}
+                          />
+                          <Typography
+                            variant="caption"
+                            fontWeight={700}
+                            color={isTargetReached ? 'success.main' : 'info.main'}
+                          >
+                            {isTargetReached ? 'Target Reached (Ready)' : 'Live Charging Progress'}
                           </Typography>
                         </Box>
                         <Typography variant="caption" fontWeight={700} color="text.primary">
@@ -144,7 +162,13 @@ export default function ChargingStations() {
                           bgcolor: alpha(theme.palette.info.main, 0.15),
                           '& .MuiLinearProgress-bar': {
                             borderRadius: 4,
-                            bgcolor: currentProgress < 30 ? theme.palette.error.main : currentProgress < 60 ? theme.palette.warning.main : theme.palette.success.main,
+                            bgcolor: isTargetReached
+                              ? theme.palette.success.main
+                              : currentProgress < 30
+                              ? theme.palette.error.main
+                              : currentProgress < 60
+                              ? theme.palette.warning.main
+                              : theme.palette.info.main,
                             transition: 'transform 0.4s ease-in-out',
                           },
                         }}
@@ -153,8 +177,16 @@ export default function ChargingStations() {
                         <Typography variant="caption" color="text.secondary">
                           Delivered: +{deliveredKwh} kWh
                         </Typography>
+                        <Typography variant="caption" fontWeight={600} color={isTargetReached ? 'success.main' : 'primary.main'}>
+                          {isTargetReached ? '✓ Complete' : `⏱ ~${estRemainingTime.formatted} left`}
+                        </Typography>
+                      </Box>
+                      <Box sx={{ mt: 0.5, pt: 0.5, borderTop: `1px dashed ${alpha(theme.palette.divider, 0.6)}`, display: 'flex', justifyContent: 'space-between' }}>
                         <Typography variant="caption" color="text.secondary">
-                          Delivering @ {station.power} kW
+                          Rate: {station.power} kW/hr
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {remainingKwh > 0 ? `${remainingKwh} kWh remaining` : 'Target reached'}
                         </Typography>
                       </Box>
                     </Box>

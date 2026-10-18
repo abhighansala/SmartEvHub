@@ -309,7 +309,7 @@ export default function Dashboard() {
                   <TableCell>Vehicle</TableCell>
                   <TableCell>Station</TableCell>
                   <TableCell>Battery</TableCell>
-                  <TableCell>Start Time</TableCell>
+                  <TableCell>Est. Remaining</TableCell>
                   <TableCell>Duration</TableCell>
                   <TableCell align="right">Est. Cost</TableCell>
                 </TableRow>
@@ -317,7 +317,14 @@ export default function Dashboard() {
               <TableBody>
                 {sessions.map(s => {
                   const ev = evs.find(e => e.id === s.evId);
+                  const station = stations.find(st => st.id === s.stationId);
+                  const stationPower = station?.power || 25;
                   const progress = ev ? ev.currentCharge : s.batteryStart;
+                  const remainingKwh = ev
+                    ? Math.max(0, Number((((s.targetCharge - progress) / 100) * ev.batteryCapacity).toFixed(1)))
+                    : 0;
+                  const estTimeRemaining = calculateChargingTime(remainingKwh, stationPower);
+
                   return (
                     <TableRow key={s.id}>
                       <TableCell sx={{ fontWeight: 500 }}>{s.evId}</TableCell>
@@ -345,7 +352,14 @@ export default function Dashboard() {
                           </Typography>
                         </Box>
                       </TableCell>
-                      <TableCell>{formatTime(s.startTime)}</TableCell>
+                      <TableCell>
+                        <Typography variant="body2" fontWeight={600} color="primary.main">
+                          ~{estTimeRemaining.formatted}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          at {stationPower} kW
+                        </Typography>
+                      </TableCell>
                       <TableCell>{getDuration(s.startTime)}</TableCell>
                       <TableCell align="right" sx={{ fontWeight: 500 }}>₹{s.estimatedCost.toFixed(2)}</TableCell>
                     </TableRow>
