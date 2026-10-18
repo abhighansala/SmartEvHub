@@ -16,20 +16,22 @@ import { useTheme, alpha } from '@mui/material/styles';
 import PlayArrowOutlined from '@mui/icons-material/PlayArrowOutlined';
 import DeleteOutline from '@mui/icons-material/DeleteOutline';
 import ArrowForwardOutlined from '@mui/icons-material/ArrowForwardOutlined';
+import ElectricBoltOutlined from '@mui/icons-material/ElectricBoltOutlined';
 
 import PageHeader from '@/components/common/PageHeader';
 import StatusChip from '@/components/common/StatusChip';
 import EmptyState from '@/components/common/EmptyState';
 import { useApp } from '@/context/AppContext';
+import {
+  calculateRequiredEnergy,
+  calculateChargingTime,
+  getRealisticWaitMinutes,
+  DEFAULT_STATION_POWER_KW,
+} from '@/utils/chargingCalc';
 
 export default function ChargingQueue() {
   const theme = useTheme();
-  const { chargingQueue, processNextCharging, removeChargingRequest } = useApp();
-
-  const getWaitTime = (requestedAt: string) => {
-    const diff = Date.now() - new Date(requestedAt).getTime();
-    return Math.round(diff / 60000);
-  };
+  const { chargingQueue, evs, processNextCharging, removeChargingRequest } = useApp();
 
   return (
     <Box>
@@ -48,13 +50,23 @@ export default function ChargingQueue() {
         }
       />
 
-      {/* FIFO Label */}
+      {/* FIFO & Power Standard Banner */}
       <Card sx={{ p: 2, mb: 3, border: `1px solid ${theme.palette.divider}`, bgcolor: alpha(theme.palette.primary.main, 0.04) }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <Chip label="FIFO" color="primary" size="small" sx={{ fontWeight: 700 }} />
-          <Typography variant="body2" color="text.secondary">
-            <strong>First In, First Out</strong> — The vehicle that requested charging first will be processed first.
-          </Typography>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 1.5 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Chip label="FIFO" color="primary" size="small" sx={{ fontWeight: 700 }} />
+            <Typography variant="body2" color="text.secondary">
+              <strong>First In, First Out</strong> — The vehicle that requested charging first will be processed first.
+            </Typography>
+          </Box>
+          <Chip
+            icon={<ElectricBoltOutlined />}
+            label="Rate Standard: 20–30 kW Stations (25 kW = 25 kWh/hr • 100 kWh in 4h)"
+            variant="outlined"
+            color="info"
+            size="small"
+            sx={{ fontWeight: 600 }}
+          />
         </Box>
       </Card>
 
@@ -100,7 +112,7 @@ export default function ChargingQueue() {
                     textAlign: 'center',
                     flexShrink: 0,
                     transition: 'all 0.3s',
-                    minWidth: 100,
+                    minWidth: 110,
                   }}
                 >
                   <Typography variant="subtitle2" fontWeight={700}>{req.evId}</Typography>
@@ -145,37 +157,64 @@ export default function ChargingQueue() {
                   <TableCell>Vehicle</TableCell>
                   <TableCell>Owner</TableCell>
                   <TableCell align="right">Battery</TableCell>
-                  <TableCell align="right">Wait Time</TableCell>
+                  <TableCell align="right">Energy Needed</TableCell>
+                  <TableCell align="right">Est. Charge Time (at 25 kW)</TableCell>
+                  <TableCell align="right">Queue Wait</TableCell>
                   <TableCell>Priority</TableCell>
                   <TableCell align="center">Actions</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
-                {chargingQueue.map((req, i) => (
-                  <TableRow key={req.id} hover>
-                    <TableCell>
-                      <Chip
-                        label={i + 1}
-                        size="small"
-                        color={i === 0 ? 'primary' : 'default'}
-                        sx={{ fontWeight: 600, minWidth: 28 }}
-                      />
-                    </TableCell>
-                    <TableCell sx={{ fontWeight: 600 }}>{req.evId}</TableCell>
-                    <TableCell>{req.evModel}</TableCell>
-                    <TableCell>{req.owner}</TableCell>
-                    <TableCell align="right">{req.currentCharge}%</TableCell>
-                    <TableCell align="right">{getWaitTime(req.requestedAt)} min</TableCell>
-                    <TableCell><StatusChip status={req.priority} /></TableCell>
-                    <TableCell align="center">
-                      <Tooltip title="Remove from queue">
-                        <IconButton size="small" onClick={() => removeChargingRequest(req.id)}>
-                          <DeleteOutline fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {chargingQueue.map((req, i) => {
+                  const evMatch = evs.find(e => e.id === req.evId);
+                  const capacity = evMatch?.batteryCapacity || (req.evId === 'EV125' ? 100 : 50);
+                  const energyKwh = calculateRequiredEnergy(capacity, req.currentCharge, 80);
+                  const chargeTime = calculateChargingTime(energyKwh, DEFAULT_STATION_POWER_KW);
+                  const waitMinutes = getRealisticWaitMinutes(req.requestedAt, i);
+
+                  return (
+                    <TableRow key={req.id} hover>
+                      <TableCell>
+                        <Chip
+                          label={i + 1}
+                          size="small"
+                          color={i === 0 ? 'primary' : 'default'}
+                          sx={{ fontWeight: 600, minWidth: 28 }}
+                        />
+                      </TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>{req.evId}</TableCell>
+                      <TableCell>
+                        <Typography variant="body2">{req.evModel}</Typography>
+                        <Typography variant="caption" color="text.secondary">{capacity} kWh Battery</Typography>
+                      </TableCell>
+                      <TableCell>{req.owner}</TableCell>
+                      <TableCell align="right">{req.currentCharge}%</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 600 }}>{energyKwh} kWh</TableCell>
+                      <TableCell align="right">
+                        <Chip
+                          label={`~${chargeTime.formatted}`}
+                          size="small"
+                          color="primary"
+                          variant="outlined"
+                          sx={{ fontWeight: 700 }}
+                        />
+                      </TableCell>
+                      <TableCell align="right">
+                        <Typography variant="body2" color="text.secondary">
+                          {waitMinutes} min
+                        </Typography>
+                      </TableCell>
+                      <TableCell><StatusChip status={req.priority} /></TableCell>
+                      <TableCell align="center">
+                        <Tooltip title="Remove from queue">
+                          <IconButton size="small" onClick={() => removeChargingRequest(req.id)}>
+                            <DeleteOutline fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           </TableContainer>

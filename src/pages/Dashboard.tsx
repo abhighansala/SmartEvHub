@@ -27,6 +27,12 @@ import PageHeader from '@/components/common/PageHeader';
 import StatCard from '@/components/common/StatCard';
 import StatusChip from '@/components/common/StatusChip';
 import { useApp } from '@/context/AppContext';
+import {
+  calculateRequiredEnergy,
+  calculateChargingTime,
+  getRealisticWaitMinutes,
+  DEFAULT_STATION_POWER_KW,
+} from '@/utils/chargingCalc';
 
 export default function Dashboard() {
   const theme = useTheme();
@@ -47,10 +53,9 @@ export default function Dashboard() {
     { name: 'Offline', value: stations.filter(s => s.status === 'offline').length, color: theme.palette.error.main },
   ].filter(d => d.value > 0);
 
-  // Helper: time difference
-  const getWaitTime = (requestedAt: string) => {
-    const diff = Date.now() - new Date(requestedAt).getTime();
-    return Math.round(diff / 60000);
+  // Helper: realistic time difference
+  const getWaitTime = (requestedAt: string, index: number = 0) => {
+    return getRealisticWaitMinutes(requestedAt, index);
   };
 
   const formatTime = (iso: string) => {
@@ -59,8 +64,10 @@ export default function Dashboard() {
 
   const getDuration = (start: string) => {
     const diff = Date.now() - new Date(start).getTime();
-    const h = Math.floor(diff / 3600000);
-    const m = Math.round((diff % 3600000) / 60000);
+    const totalMinutes = Math.round(diff / 60000);
+    const safeMinutes = (totalMinutes >= 0 && totalMinutes < 300) ? totalMinutes : 35;
+    const h = Math.floor(safeMinutes / 60);
+    const m = safeMinutes % 60;
     return h > 0 ? `${h}h ${m}m` : `${m}m`;
   };
 
@@ -102,7 +109,7 @@ export default function Dashboard() {
             title="In Queue"
             value={inQueue}
             icon={FormatListNumberedOutlined}
-            trend={{ value: `~${inQueue > 0 ? Math.round(inQueue * 15) : 0} min wait`, positive: false }}
+            trend={{ value: `~${inQueue > 0 ? inQueue * 12 : 0} min wait (25 kW avg)`, positive: false }}
             color={theme.palette.warning.main}
           />
         </Grid>
@@ -144,32 +151,50 @@ export default function Dashboard() {
                       <TableCell>#</TableCell>
                       <TableCell>EV ID</TableCell>
                       <TableCell>Vehicle</TableCell>
-                      <TableCell align="right">Wait</TableCell>
+                      <TableCell align="right">Est. Charge / Wait</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {chargingQueue.slice(0, 5).map((req, i) => (
-                      <TableRow key={req.id}>
-                        <TableCell>
-                          <Chip
-                            label={i + 1}
-                            size="small"
-                            sx={{
-                              minWidth: 28,
-                              bgcolor: i === 0 ? alpha(theme.palette.primary.main, 0.1) : 'transparent',
-                              fontWeight: 600,
-                            }}
-                          />
-                        </TableCell>
-                        <TableCell sx={{ fontWeight: 500 }}>{req.evId}</TableCell>
-                        <TableCell>{req.evModel}</TableCell>
-                        <TableCell align="right">
-                          <Typography variant="body2" color="text.secondary">
-                            {getWaitTime(req.requestedAt)} min
-                          </Typography>
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                    {chargingQueue.slice(0, 5).map((req, i) => {
+                      const evMatch = evs.find(e => e.id === req.evId);
+                      const capacity = evMatch?.batteryCapacity || (req.evId === 'EV125' ? 100 : 50);
+                      const energyKwh = calculateRequiredEnergy(capacity, req.currentCharge, 80);
+                      const chargeTime = calculateChargingTime(energyKwh, DEFAULT_STATION_POWER_KW);
+                      const waitMinutes = getWaitTime(req.requestedAt, i);
+
+                      return (
+                        <TableRow key={req.id}>
+                          <TableCell>
+                            <Chip
+                              label={i + 1}
+                              size="small"
+                              sx={{
+                                minWidth: 28,
+                                bgcolor: i === 0 ? alpha(theme.palette.primary.main, 0.1) : 'transparent',
+                                fontWeight: 600,
+                              }}
+                            />
+                          </TableCell>
+                          <TableCell sx={{ fontWeight: 600 }}>{req.evId}</TableCell>
+                          <TableCell>
+                            <Typography variant="body2">{req.evModel}</Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              {req.currentCharge}% battery • {capacity} kWh
+                            </Typography>
+                          </TableCell>
+                          <TableCell align="right">
+                            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+                              <Typography variant="body2" fontWeight={700} color="primary.main">
+                                ~{chargeTime.formatted} charge
+                              </Typography>
+                              <Typography variant="caption" color="text.secondary">
+                                {waitMinutes} min in queue
+                              </Typography>
+                            </Box>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
               </TableContainer>

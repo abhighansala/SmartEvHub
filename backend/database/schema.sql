@@ -123,13 +123,14 @@ INSERT OR IGNORE INTO EV (id, owner_name, model, battery_capacity, current_charg
 ('EV-103', 'Vikram Malhotra', 'Hyundai Ioniq 5', 72.6, 74.0, 'available', datetime('now', '-1 hour')),
 ('EV-104', 'Ananya Iyer', 'Mahindra XUV400', 39.4, 12.0, 'waiting', datetime('now', '-5 minutes')),
 ('EV-105', 'Karan Verma', 'BYD Atto 3', 60.5, 45.0, 'available', datetime('now', '-2 hours')),
-('EV-106', 'Sneha Reddy', 'Kia EV6', 77.4, 91.0, 'available', datetime('now', '-30 minutes'));
+('EV-106', 'Sneha Reddy', 'Kia EV6', 77.4, 91.0, 'available', datetime('now', '-30 minutes')),
+('EV-125', 'Vikram Malhotra', 'Volvo EX90 (100 kWh)', 100.0, 0.0, 'waiting', datetime('now', '-2 minutes'));
 
--- Charging Stations
+-- Charging Stations (Rated between 20 kW and 30 kW; 25 kW = 25 kWh/hr standard)
 INSERT OR IGNORE INTO ChargingStation (id, name, power, connector_type, status, current_vehicle_id, session_start, location, total_ports, available_ports) VALUES
-('CS-1', 'DC Fast Charger 1', 60.0, 'CCS2', 'charging', 'EV-101', datetime('now', '-25 minutes'), 'Bay A-1', 1, 0),
-('CS-2', 'DC Fast Charger 2', 60.0, 'CCS2', 'available', NULL, NULL, 'Bay A-2', 1, 1),
-('CS-3', 'Ultra Fast Charger 3', 120.0, 'CCS2', 'available', NULL, NULL, 'Bay B-1', 1, 1),
+('CS-1', 'Standard Bay 1', 25.0, 'CCS2', 'charging', 'EV-101', datetime('now', '-25 minutes'), 'Bay A-1', 1, 0),
+('CS-2', 'Fast Bay 2', 30.0, 'CCS2', 'available', NULL, NULL, 'Bay A-2', 1, 1),
+('CS-3', 'Flex Bay 3', 28.0, 'CCS2', 'available', NULL, NULL, 'Bay B-1', 1, 1),
 ('CS-4', 'AC Type 2 Charger 4', 22.0, 'Type 2', 'maintenance', NULL, NULL, 'Bay B-2', 1, 0);
 
 -- Batteries for Swap Inventory

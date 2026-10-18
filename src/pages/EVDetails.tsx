@@ -22,6 +22,11 @@ import PageHeader from '@/components/common/PageHeader';
 import StatusChip from '@/components/common/StatusChip';
 import EmptyState from '@/components/common/EmptyState';
 import { useApp } from '@/context/AppContext';
+import {
+  calculateRequiredEnergy,
+  calculateChargingTime,
+  DEFAULT_STATION_POWER_KW,
+} from '@/utils/chargingCalc';
 
 export default function EVDetails() {
   const { id } = useParams<{ id: string }>();
@@ -161,12 +166,43 @@ export default function EVDetails() {
         <Box sx={{ p: 3 }}>
           {tab === 0 && (
             <Box>
-              <Typography variant="body1">
-                {ev.model} registered to {ev.owner}. Battery capacity is {ev.batteryCapacity} kWh
-                with current charge at {ev.currentCharge}%.
-                {ev.status === 'charging' && ' Currently undergoing a charging session.'}
+              <Typography variant="body1" sx={{ mb: 2.5 }}>
+                {ev.model} registered to {ev.owner}. Battery capacity is <strong>{ev.batteryCapacity} kWh</strong>{' '}
+                with current charge at <strong>{ev.currentCharge}%</strong>.
+                {ev.status === 'charging' && ' Currently undergoing an active charging session.'}
                 {ev.status === 'waiting' && ' Currently waiting in the charging queue.'}
               </Typography>
+
+              {/* Charging Time Estimator at 25 kW Rate Standard */}
+              <Box sx={{ p: 2.5, borderRadius: 3, bgcolor: alpha(theme.palette.primary.main, 0.04), border: `1px solid ${alpha(theme.palette.primary.main, 0.2)}` }}>
+                <Typography variant="subtitle2" fontWeight={700} color="primary.main" sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 1.5 }}>
+                  <BatteryChargingFullOutlined fontSize="small" /> Standard Charging Estimates (20–30 kW Stations, 25 kW = 25 kWh/hr Rate)
+                </Typography>
+                <Grid container spacing={2}>
+                  <Grid size={{ xs: 12, sm: 6 }}>
+                    <Box sx={{ p: 2, borderRadius: 2, bgcolor: 'background.paper', border: `1px solid ${theme.palette.divider}` }}>
+                      <Typography variant="caption" color="text.secondary">Charge to 80% (Fast Charge Target)</Typography>
+                      <Typography variant="h6" fontWeight={700} color="primary.main">
+                        ~{calculateChargingTime(calculateRequiredEnergy(ev.batteryCapacity, ev.currentCharge, 80), DEFAULT_STATION_POWER_KW).formatted}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        Needs {calculateRequiredEnergy(ev.batteryCapacity, ev.currentCharge, 80)} kWh at 25 kW
+                      </Typography>
+                    </Box>
+                  </Grid>
+                  <Grid size={{ xs: 12, sm: 6 }}>
+                    <Box sx={{ p: 2, borderRadius: 2, bgcolor: 'background.paper', border: `1px solid ${theme.palette.divider}` }}>
+                      <Typography variant="caption" color="text.secondary">Full Charge to 100%</Typography>
+                      <Typography variant="h6" fontWeight={700} color="info.main">
+                        ~{calculateChargingTime(calculateRequiredEnergy(ev.batteryCapacity, ev.currentCharge, 100), DEFAULT_STATION_POWER_KW).formatted}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        Needs {calculateRequiredEnergy(ev.batteryCapacity, ev.currentCharge, 100)} kWh at 25 kW (e.g. 100 kWh in 4h)
+                      </Typography>
+                    </Box>
+                  </Grid>
+                </Grid>
+              </Box>
             </Box>
           )}
           {tab === 1 && (

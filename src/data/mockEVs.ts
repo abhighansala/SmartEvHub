@@ -25,4 +25,5 @@ export const mockEVs: EV[] = [
   { id: 'EV122', owner: 'Swati Kulkarni', model: 'MG ZS EV', batteryCapacity: 50.3, currentCharge: 78, status: 'available', lastActivity: '2026-08-25T13:30:00', registeredAt: '2026-07-25T00:00:00' },
   { id: 'EV123', owner: 'Rajesh Agarwal', model: 'Hyundai Kona EV', batteryCapacity: 39.2, currentCharge: 33, status: 'available', lastActivity: '2026-08-25T10:00:00', registeredAt: '2026-08-15T00:00:00' },
   { id: 'EV124', owner: 'Neha Chauhan', model: 'Tata Punch EV', batteryCapacity: 35.0, currentCharge: 85, status: 'available', lastActivity: '2026-08-25T09:00:00', registeredAt: '2026-08-20T00:00:00' },
+  { id: 'EV125', owner: 'Vikram Malhotra', model: 'Volvo EX90 (100 kWh)', batteryCapacity: 100.0, currentCharge: 0, status: 'waiting', lastActivity: new Date().toISOString(), registeredAt: '2026-08-20T00:00:00' },
 ];

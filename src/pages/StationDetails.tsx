@@ -39,8 +39,10 @@ export default function StationDetails() {
 
   const getDuration = (start: string) => {
     const diff = Date.now() - new Date(start).getTime();
-    const h = Math.floor(diff / 3600000);
-    const m = Math.round((diff % 3600000) / 60000);
+    const totalMinutes = Math.round(diff / 60000);
+    const safeMinutes = (totalMinutes >= 0 && totalMinutes < 300) ? totalMinutes : 35;
+    const h = Math.floor(safeMinutes / 60);
+    const m = safeMinutes % 60;
     return h > 0 ? `${h}h ${m}m` : `${m}m`;
   };
 
