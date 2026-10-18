@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, type ReactNode } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
 import type {
   User, EV, Station, Battery, ChargingSession, Transaction,
   ChargingRequest, SwapRequest, Notification, AppSettings,
@@ -237,10 +237,76 @@ export function AppProvider({ children }: { children: ReactNode }) {
     showSnackbar(`${req.evId} added to swap queue`);
   }, [showSnackbar]);
 
+  // ─── Notifications ───────────────────────────────────────
+  const markNotificationRead = useCallback((id: string) => {
+    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+  }, []);
+
+  const markAllNotificationsRead = useCallback(() => {
+    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+  }, []);
+
+  const addNotification = useCallback((notification: Omit<Notification, 'id' | 'timestamp' | 'read'>) => {
+    setNotifications(prev => [{
+      ...notification,
+      id: nextId('N'),
+      timestamp: new Date().toISOString(),
+      read: false,
+    }, ...prev]);
+  }, []);
+
+  // ─── Real-Time Charging Simulation Engine ─────────────────
+  // Simulates real-time physical battery charging for vehicles connected to active stations
+  const notifiedTargets = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const activeSessions = sessions.filter(s => s.status === 'active');
+      if (activeSessions.length === 0) return;
+
+      setEVs(prevEVs => {
+        let changed = false;
+        const nextEVs = prevEVs.map(ev => {
+          const session = activeSessions.find(s => s.evId === ev.id);
+          if (!session) return ev;
+
+          // EV already reached target charge
+          if (ev.currentCharge >= session.targetCharge) return ev;
+
+          const nextCharge = Math.min(ev.currentCharge + 1, session.targetCharge);
+          changed = true;
+
+          // If reached target on this tick, alert user
+          if (nextCharge >= session.targetCharge && !notifiedTargets.current.has(session.id)) {
+            notifiedTargets.current.add(session.id);
+            showSnackbar(`${ev.id} (${ev.model}) has reached target charge of ${session.targetCharge}%!`, 'success');
+            addNotification({
+              message: `${ev.id} (${ev.model}) reached ${session.targetCharge}% target at station ${session.stationId}. Session ready to complete.`,
+              type: 'success',
+              link: '/sessions',
+            });
+          }
+
+          return {
+            ...ev,
+            currentCharge: nextCharge,
+            lastActivity: new Date().toISOString(),
+          };
+        });
+
+        return changed ? nextEVs : prevEVs;
+      });
+    }, 2000); // 2-second tick for steady visible progress
+
+    return () => clearInterval(timer);
+  }, [sessions, showSnackbar, addNotification]);
+
   // ─── Sessions ────────────────────────────────────────────
   const completeSession = useCallback((sessionId: string) => {
     const session = sessions.find(s => s.id === sessionId);
     if (!session) return null;
+
+    notifiedTargets.current.delete(sessionId);
 
     // Remove from active sessions
     setSessions(prev => prev.filter(s => s.id !== sessionId));
@@ -259,7 +325,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         : ev
     ));
 
-    // Create transaction
+    // Create transaction with accurate energy delivered
+    const ev = evs.find(e => e.id === session.evId);
+    const capacity = ev?.batteryCapacity || 40.0;
+    const finalCharge = ev ? ev.currentCharge : session.targetCharge;
+    const energyDelivered = Math.round(Math.max(0, (finalCharge - session.batteryStart) / 100 * capacity) * 10) / 10;
+
     const txn: Transaction = {
       id: nextId('TXN'),
       evId: session.evId,
@@ -267,32 +338,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       stationOrBattery: session.stationId,
       date: new Date().toISOString(),
       amount: session.estimatedCost,
-      energyDelivered: Math.round((session.targetCharge - session.batteryStart) * 0.4 * 10) / 10,
+      energyDelivered,
       duration: Math.round((Date.now() - new Date(session.startTime).getTime()) / 60000),
       status: 'completed',
     };
     setTransactions(prev => [txn, ...prev]);
     showSnackbar(`Charging session for ${session.evId} completed — ₹${session.estimatedCost.toFixed(2)}`);
     return txn;
-  }, [sessions, showSnackbar]);
-
-  // ─── Notifications ───────────────────────────────────────
-  const markNotificationRead = useCallback((id: string) => {
-    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
-  }, []);
-
-  const markAllNotificationsRead = useCallback(() => {
-    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
-  }, []);
-
-  const addNotification = useCallback((notification: Omit<Notification, 'id' | 'timestamp' | 'read'>) => {
-    setNotifications(prev => [{
-      ...notification,
-      id: nextId('N'),
-      timestamp: new Date().toISOString(),
-      read: false,
-    }, ...prev]);
-  }, []);
+  }, [sessions, evs, showSnackbar]);
 
   // ─── Settings ────────────────────────────────────────────
   const updateSettings = useCallback((newSettings: Partial<AppSettings>) => {

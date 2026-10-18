@@ -11,6 +11,7 @@ import { useTheme, alpha } from '@mui/material/styles';
 import ArrowBackOutlined from '@mui/icons-material/ArrowBackOutlined';
 import StopCircleOutlined from '@mui/icons-material/StopCircleOutlined';
 import ElectricBoltOutlined from '@mui/icons-material/ElectricBoltOutlined';
+import CheckCircleOutline from '@mui/icons-material/CheckCircleOutline';
 
 import PageHeader from '@/components/common/PageHeader';
 import StatusChip from '@/components/common/StatusChip';
@@ -21,7 +22,7 @@ export default function StationDetails() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const theme = useTheme();
-  const { stations, sessions, completeSession } = useApp();
+  const { stations, sessions, evs, completeSession } = useApp();
 
   const station = stations.find(s => s.id === id);
   if (!station) {
@@ -36,6 +37,7 @@ export default function StationDetails() {
   }
 
   const session = sessions.find(s => s.stationId === station.id);
+  const ev = session ? evs.find(e => e.id === session.evId) : null;
 
   const getDuration = (start: string) => {
     const diff = Date.now() - new Date(start).getTime();
@@ -46,9 +48,11 @@ export default function StationDetails() {
     return h > 0 ? `${h}h ${m}m` : `${m}m`;
   };
 
-  const progress = session
-    ? Math.min(session.batteryStart + (session.targetCharge - session.batteryStart) * 0.6, session.targetCharge)
+  const progress = ev ? ev.currentCharge : (session ? session.batteryStart : 0);
+  const deliveredKwh = ev && session
+    ? Math.round(Math.max(0, ((progress - session.batteryStart) / 100) * ev.batteryCapacity) * 10) / 10
     : 0;
+  const isTargetReached = session ? progress >= session.targetCharge : false;
 
   return (
     <Box>
@@ -100,17 +104,17 @@ export default function StationDetails() {
                     display: 'flex',
                     alignItems: 'center',
                     gap: 1,
-                    color: theme.palette.info.main,
+                    color: isTargetReached ? theme.palette.success.main : theme.palette.info.main,
                   }}
                 >
-                  <ElectricBoltOutlined sx={{ fontSize: 28, animation: 'pulse 1.5s infinite' }} />
-                  <Typography variant="h3" color="info.main" fontWeight={700}>
-                    Charging...
+                  <ElectricBoltOutlined sx={{ fontSize: 28, animation: isTargetReached ? 'none' : 'pulse 1.5s infinite' }} />
+                  <Typography variant="h4" color={isTargetReached ? 'success.main' : 'info.main'} fontWeight={700}>
+                    {isTargetReached ? 'Target Reached (Ready)' : 'Live Charging in Progress...'}
                   </Typography>
                 </Box>
 
                 <Box sx={{ width: '100%', textAlign: 'center' }}>
-                  <Typography variant="h1" sx={{ fontSize: '3rem', fontWeight: 700, color: theme.palette.info.main }}>
+                  <Typography variant="h1" sx={{ fontSize: '3.5rem', fontWeight: 800, color: isTargetReached ? theme.palette.success.main : theme.palette.info.main }}>
                     {Math.round(progress)}%
                   </Typography>
                   <LinearProgress
@@ -118,40 +122,58 @@ export default function StationDetails() {
                     value={progress}
                     sx={{
                       mt: 2,
-                      height: 12,
-                      borderRadius: 6,
+                      height: 14,
+                      borderRadius: 7,
                       bgcolor: alpha(theme.palette.info.main, 0.1),
-                      '& .MuiLinearProgress-bar': { borderRadius: 6 },
+                      '& .MuiLinearProgress-bar': {
+                        borderRadius: 7,
+                        bgcolor: isTargetReached ? theme.palette.success.main : progress < 30 ? theme.palette.error.main : progress < 60 ? theme.palette.warning.main : theme.palette.info.main,
+                        transition: 'transform 0.4s ease-in-out',
+                      },
                     }}
                   />
-                  <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                    Target: {session.targetCharge}%
+                  <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5, fontWeight: 500 }}>
+                    Target: {session.targetCharge}% • Started at {session.batteryStart}% • Power Rate: {station.power} kW
                   </Typography>
                 </Box>
 
-                <Box sx={{ display: 'flex', gap: 4 }}>
-                  <Box sx={{ textAlign: 'center' }}>
-                    <Typography variant="h4">{session.evId}</Typography>
-                    <Typography variant="caption" color="text.secondary">Vehicle</Typography>
+                <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap', justifyContent: 'center' }}>
+                  <Box sx={{ textAlign: 'center', minWidth: 90 }}>
+                    <Typography variant="h5" fontWeight={700}>{session.evId}</Typography>
+                    <Typography variant="caption" color="text.secondary">{ev?.model || 'Vehicle'}</Typography>
                   </Box>
-                  <Box sx={{ textAlign: 'center' }}>
-                    <Typography variant="h4">{getDuration(session.startTime)}</Typography>
+                  <Box sx={{ textAlign: 'center', minWidth: 90 }}>
+                    <Typography variant="h5" fontWeight={700} color="info.main">+{deliveredKwh} kWh</Typography>
+                    <Typography variant="caption" color="text.secondary">Delivered Energy</Typography>
+                  </Box>
+                  <Box sx={{ textAlign: 'center', minWidth: 90 }}>
+                    <Typography variant="h5" fontWeight={700}>{getDuration(session.startTime)}</Typography>
                     <Typography variant="caption" color="text.secondary">Duration</Typography>
                   </Box>
-                  <Box sx={{ textAlign: 'center' }}>
-                    <Typography variant="h4">₹{session.estimatedCost.toFixed(0)}</Typography>
+                  <Box sx={{ textAlign: 'center', minWidth: 90 }}>
+                    <Typography variant="h5" fontWeight={700}>₹{session.estimatedCost.toFixed(0)}</Typography>
                     <Typography variant="caption" color="text.secondary">Est. Cost</Typography>
                   </Box>
                 </Box>
 
-                <Button
-                  variant="contained"
-                  color="error"
-                  startIcon={<StopCircleOutlined />}
-                  onClick={() => completeSession(session.id)}
-                >
-                  Stop Session
-                </Button>
+                <Box sx={{ display: 'flex', gap: 2 }}>
+                  <Button
+                    variant={isTargetReached ? 'contained' : 'outlined'}
+                    color="success"
+                    startIcon={<CheckCircleOutline />}
+                    onClick={() => completeSession(session.id)}
+                  >
+                    {isTargetReached ? 'Finish Session' : 'Complete Session'}
+                  </Button>
+                  <Button
+                    variant="outlined"
+                    color="error"
+                    startIcon={<StopCircleOutlined />}
+                    onClick={() => completeSession(session.id)}
+                  >
+                    Stop Early
+                  </Button>
+                </Box>
               </Box>
             ) : (
               <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 2, py: 4 }}>

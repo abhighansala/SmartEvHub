@@ -316,16 +316,14 @@ export default function Dashboard() {
               </TableHead>
               <TableBody>
                 {sessions.map(s => {
-                  const progress = Math.min(
-                    s.batteryStart + (s.targetCharge - s.batteryStart) * 0.6,
-                    s.targetCharge
-                  );
+                  const ev = evs.find(e => e.id === s.evId);
+                  const progress = ev ? ev.currentCharge : s.batteryStart;
                   return (
                     <TableRow key={s.id}>
                       <TableCell sx={{ fontWeight: 500 }}>{s.evId}</TableCell>
                       <TableCell>{s.evModel}</TableCell>
                       <TableCell>{s.stationId}</TableCell>
-                      <TableCell sx={{ minWidth: 120 }}>
+                      <TableCell sx={{ minWidth: 140 }}>
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                           <LinearProgress
                             variant="determinate"
@@ -338,10 +336,11 @@ export default function Dashboard() {
                               '& .MuiLinearProgress-bar': {
                                 borderRadius: 4,
                                 bgcolor: progress < 30 ? theme.palette.error.main : progress < 60 ? theme.palette.warning.main : theme.palette.success.main,
+                                transition: 'transform 0.4s ease-in-out',
                               },
                             }}
                           />
-                          <Typography variant="caption" fontWeight={600} sx={{ minWidth: 32 }}>
+                          <Typography variant="caption" fontWeight={700} sx={{ minWidth: 36 }}>
                             {Math.round(progress)}%
                           </Typography>
                         </Box>
