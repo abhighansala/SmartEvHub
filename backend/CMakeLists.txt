@@ -30,8 +30,26 @@ set(COMMON_INCLUDES
     ${CMAKE_SOURCE_DIR}/agreev_singh
     ${CMAKE_SOURCE_DIR}/agreev_singh/models
     ${CMAKE_SOURCE_DIR}/agreev_singh/services
-    /home/abhi/pbl/Crow/include
 )
+
+# Crow and Asio dependency resolution (fallback to bundled headers if system path not found)
+if(EXISTS "/home/abhi/pbl/Crow/include")
+    list(APPEND COMMON_INCLUDES "/home/abhi/pbl/Crow/include")
+else()
+    list(APPEND COMMON_INCLUDES
+        ${CMAKE_CURRENT_SOURCE_DIR}/aditya_runtime/third_party/crow/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/aditya_runtime/third_party/asio/include
+    )
+endif()
+
+add_compile_definitions(ASIO_STANDALONE)
+
+# Platform-specific socket and dynamic linking libraries
+if(WIN32)
+    set(PLATFORM_LIBS ws2_32 mswsock)
+else()
+    set(PLATFORM_LIBS dl)
+endif()
 
 # -----------------------------------------------------------------------------
 # 1. Main Unified Server Target
@@ -66,7 +84,7 @@ add_executable(smart_ev_hub_backend
 )
 
 target_include_directories(smart_ev_hub_backend PRIVATE ${COMMON_INCLUDES})
-target_link_libraries(smart_ev_hub_backend PRIVATE Threads::Threads dl)
+target_link_libraries(smart_ev_hub_backend PRIVATE Threads::Threads ${PLATFORM_LIBS})
 
 # -----------------------------------------------------------------------------
 # 2. Individual Member Standalone Test Targets
@@ -80,7 +98,7 @@ add_executable(test_aditya_singh
     src/sqlite3.c
 )
 target_include_directories(test_aditya_singh PRIVATE ${COMMON_INCLUDES})
-target_link_libraries(test_aditya_singh PRIVATE Threads::Threads dl)
+target_link_libraries(test_aditya_singh PRIVATE Threads::Threads ${PLATFORM_LIBS})
 
 # Test 2: Priyanshu Dutt (EV Management)
 add_executable(test_priyanshu_dutt
@@ -90,7 +108,7 @@ add_executable(test_priyanshu_dutt
     src/sqlite3.c
 )
 target_include_directories(test_priyanshu_dutt PRIVATE ${COMMON_INCLUDES})
-target_link_libraries(test_priyanshu_dutt PRIVATE Threads::Threads dl)
+target_link_libraries(test_priyanshu_dutt PRIVATE Threads::Threads ${PLATFORM_LIBS})
 
 # Test 3: Mritunjay Thakur (Charging Stations)
 add_executable(test_mritunjay_thakur
@@ -100,7 +118,7 @@ add_executable(test_mritunjay_thakur
     src/sqlite3.c
 )
 target_include_directories(test_mritunjay_thakur PRIVATE ${COMMON_INCLUDES})
-target_link_libraries(test_mritunjay_thakur PRIVATE Threads::Threads dl)
+target_link_libraries(test_mritunjay_thakur PRIVATE Threads::Threads ${PLATFORM_LIBS})
 
 # Test 4: Amit Singh Kaintura (Battery + Battery Swap)
 add_executable(test_amit_singh_kaintura
@@ -110,7 +128,7 @@ add_executable(test_amit_singh_kaintura
     src/sqlite3.c
 )
 target_include_directories(test_amit_singh_kaintura PRIVATE ${COMMON_INCLUDES})
-target_link_libraries(test_amit_singh_kaintura PRIVATE Threads::Threads dl)
+target_link_libraries(test_amit_singh_kaintura PRIVATE Threads::Threads ${PLATFORM_LIBS})
 
 # Test 5: Abhishek Ghansala (UI + DSA)
 add_executable(test_abhishek_ghansala
@@ -120,7 +138,7 @@ add_executable(test_abhishek_ghansala
     abhishek_ghansala/dsa/transaction_stack.cpp
 )
 target_include_directories(test_abhishek_ghansala PRIVATE ${COMMON_INCLUDES})
-target_link_libraries(test_abhishek_ghansala PRIVATE Threads::Threads dl)
+target_link_libraries(test_abhishek_ghansala PRIVATE Threads::Threads ${PLATFORM_LIBS})
 
 # Test 6: Agreev Singh (Transactions + Analytics)
 add_executable(test_agreev_singh
@@ -130,4 +148,4 @@ add_executable(test_agreev_singh
     src/sqlite3.c
 )
 target_include_directories(test_agreev_singh PRIVATE ${COMMON_INCLUDES})
-target_link_libraries(test_agreev_singh PRIVATE Threads::Threads dl)
+target_link_libraries(test_agreev_singh PRIVATE Threads::Threads ${PLATFORM_LIBS})
