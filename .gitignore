@@ -45,3 +45,12 @@ next-env.d.ts
 # Compiled files
 *.exe
 *.o
+
+# SQLite temporary files & local database
+*.db
+*.db-shm
+*.db-wal
+*.bak
+
+# Auxiliary development runtime
+backend/aditya_runtime/
