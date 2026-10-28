@@ -108,6 +108,10 @@ export const api = {
     return request('/evs');
   },
 
+  async getEVById(id: string) {
+    return request(`/evs/${id}`);
+  },
+
   async createEV(ev: any) {
     return request('/evs', {
       method: 'POST',

@@ -51,9 +51,9 @@ interface AppContextType {
   refreshBackendData: () => Promise<void>;
 
   // EV CRUD
-  addEV: (ev: Omit<EV, 'lastActivity' | 'registeredAt'>) => void;
-  updateEV: (id: string, data: Partial<EV>) => void;
-  deleteEV: (id: string) => void;
+  addEV: (ev: Omit<EV, 'lastActivity' | 'registeredAt'>) => Promise<boolean>;
+  updateEV: (id: string, data: Partial<EV>) => Promise<boolean>;
+  deleteEV: (id: string) => Promise<boolean>;
 
   // Station operations
   updateStation: (id: string, data: Partial<Station>) => void;
@@ -241,42 +241,66 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [refreshBackendData]);
 
   // ─── EV CRUD ─────────────────────────────────────────────
-  const addEV = useCallback(async (ev: Omit<EV, 'lastActivity' | 'registeredAt'>) => {
+  const addEV = useCallback(async (ev: Omit<EV, 'lastActivity' | 'registeredAt'>): Promise<boolean> => {
     const now = new Date().toISOString();
     const newEV = { ...ev, lastActivity: now, registeredAt: now };
-    setEVs(prev => [...prev, newEV]);
-    showSnackbar(`EV ${ev.id} registered successfully`);
 
     // Persist to C++ backend if online
     if (isBackendOnline) {
       try {
         await api.createEV(newEV);
+        setEVs(prev => [...prev, newEV]);
+        showSnackbar(`EV ${ev.id} registered successfully`, 'success');
+        return true;
       } catch (e: any) {
-        console.error('Failed to sync EV to backend:', e.message);
+        showSnackbar(e.message || `Failed to register EV ${ev.id} on backend`, 'error');
+        return false;
       }
+    } else {
+      // In offline fallback mode: check duplicate ID locally
+      if (evs.some(existing => existing.id.toLowerCase() === ev.id.toLowerCase())) {
+        showSnackbar(`EV with ID ${ev.id} already exists.`, 'error');
+        return false;
+      }
+      setEVs(prev => [...prev, newEV]);
+      showSnackbar(`EV ${ev.id} registered successfully (Offline Mode)`, 'info');
+      return true;
     }
-  }, [isBackendOnline, showSnackbar]);
+  }, [isBackendOnline, evs, showSnackbar]);
 
-  const updateEV = useCallback(async (id: string, data: Partial<EV>) => {
-    setEVs(prev => prev.map(ev => ev.id === id ? { ...ev, ...data } : ev));
+  const updateEV = useCallback(async (id: string, data: Partial<EV>): Promise<boolean> => {
     if (isBackendOnline) {
       try {
         await api.updateEV(id, data);
-      } catch (e) {
-        // silently fallback
+        setEVs(prev => prev.map(ev => ev.id === id ? { ...ev, ...data } : ev));
+        showSnackbar(`EV ${id} updated successfully`, 'success');
+        return true;
+      } catch (e: any) {
+        showSnackbar(e.message || `Failed to update EV ${id}`, 'error');
+        return false;
       }
+    } else {
+      setEVs(prev => prev.map(ev => ev.id === id ? { ...ev, ...data } : ev));
+      showSnackbar(`EV ${id} updated (Offline Mode)`, 'info');
+      return true;
     }
-  }, [isBackendOnline]);
+  }, [isBackendOnline, showSnackbar]);
 
-  const deleteEV = useCallback(async (id: string) => {
-    setEVs(prev => prev.filter(ev => ev.id !== id));
-    showSnackbar(`EV ${id} removed`);
+  const deleteEV = useCallback(async (id: string): Promise<boolean> => {
     if (isBackendOnline) {
       try {
         await api.deleteEV(id);
-      } catch (e) {
-        // silently fallback
+        setEVs(prev => prev.filter(ev => ev.id !== id));
+        showSnackbar(`EV ${id} removed successfully`, 'success');
+        return true;
+      } catch (e: any) {
+        showSnackbar(e.message || `Failed to delete EV ${id}`, 'error');
+        return false;
       }
+    } else {
+      setEVs(prev => prev.filter(ev => ev.id !== id));
+      showSnackbar(`EV ${id} removed (Offline Mode)`, 'info');
+      return true;
     }
   }, [isBackendOnline, showSnackbar]);
 

@@ -88,7 +88,7 @@ bool EVService::getEVById(const std::string& id, EV& outEV) {
 
 bool EVService::createEV(const EV& ev, std::string& outError) {
     if (!ev.isValid()) {
-        outError = "Invalid EV: Ensure battery charge is 0-100% and ID is not empty.";
+        outError = "Invalid EV: Ensure battery charge is 0-100%, capacity is positive, and ID/model are not empty.";
         return false;
     }
 
@@ -117,11 +117,17 @@ bool EVService::createEV(const EV& ev, std::string& outError) {
             sqlite3_finalize(stmt);
             if (rc == SQLITE_DONE) {
                 return true;
+            } else {
+                outError = std::string("Database error: ") + sqlite3_errmsg(handle);
+                return false;
             }
+        } else {
+            outError = std::string("Database error: ") + sqlite3_errmsg(handle);
+            return false;
         }
     }
 
-    // Store in local array
+    // Fallback: Store in local array if database is not connected
     if (evCount < MAX_EVS) {
         evArray[evCount] = ev;
         evCount++;
@@ -134,11 +140,11 @@ bool EVService::createEV(const EV& ev, std::string& outError) {
 
 bool EVService::updateEV(const std::string& id, const EV& updatedEV, std::string& outError) {
     if (!updatedEV.isValid()) {
-        outError = "Invalid EV update data.";
+        outError = "Invalid EV update data: Ensure battery charge is 0-100%, capacity is positive, and ID/model are not empty.";
         return false;
     }
 
-    // Update in database
+    // Update in database if connected
     if (db != nullptr && db->isOpen()) {
         sqlite3* handle = db->getDbHandle();
         std::string sql = "UPDATE EV SET owner_name = ?, model = ?, battery_capacity = ?, current_charge = ?, status = ? WHERE id = ?;";
@@ -154,11 +160,24 @@ bool EVService::updateEV(const std::string& id, const EV& updatedEV, std::string
 
             int rc = sqlite3_step(stmt);
             sqlite3_finalize(stmt);
-            return (rc == SQLITE_DONE);
+
+            if (rc != SQLITE_DONE) {
+                outError = std::string("Database error: ") + sqlite3_errmsg(handle);
+                return false;
+            }
+
+            int changes = sqlite3_changes(handle);
+            if (changes > 0) {
+                return true;
+            }
+            // If 0 rows were affected in database, check fallback array below or report not found
+        } else {
+            outError = std::string("Database error: ") + sqlite3_errmsg(handle);
+            return false;
         }
     }
 
-    // Update in local array
+    // Update in local fallback array
     for (int i = 0; i < evCount; i++) {
         if (evArray[i].getId() == id) {
             evArray[i] = updatedEV;
@@ -170,8 +189,8 @@ bool EVService::updateEV(const std::string& id, const EV& updatedEV, std::string
     return false;
 }
 
-bool EVService::deleteEV(const std::string& id) {
-    // Delete from database
+bool EVService::deleteEV(const std::string& id, std::string& outError) {
+    // Delete from database if connected
     if (db != nullptr && db->isOpen()) {
         sqlite3* handle = db->getDbHandle();
         std::string sql = "DELETE FROM EV WHERE id = ?;";
@@ -181,7 +200,20 @@ bool EVService::deleteEV(const std::string& id) {
             sqlite3_bind_text(stmt, 1, id.c_str(), -1, SQLITE_STATIC);
             int rc = sqlite3_step(stmt);
             sqlite3_finalize(stmt);
-            return (rc == SQLITE_DONE);
+
+            if (rc != SQLITE_DONE) {
+                outError = std::string("Database error: ") + sqlite3_errmsg(handle);
+                return false;
+            }
+
+            int changes = sqlite3_changes(handle);
+            if (changes > 0) {
+                return true;
+            }
+            // If 0 rows were affected in database, check fallback array below or report not found
+        } else {
+            outError = std::string("Database error: ") + sqlite3_errmsg(handle);
+            return false;
         }
     }
 
@@ -196,5 +228,11 @@ bool EVService::deleteEV(const std::string& id) {
         }
     }
 
+    outError = "EV not found with ID: " + id;
     return false;
+}
+
+bool EVService::deleteEV(const std::string& id) {
+    std::string err;
+    return deleteEV(id, err);
 }

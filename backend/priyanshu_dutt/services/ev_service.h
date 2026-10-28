@@ -36,6 +36,7 @@ public:
 
     // Deletes an EV
     bool deleteEV(const std::string& id);
+    bool deleteEV(const std::string& id, std::string& outError);
 
     // Get current in-memory count
     int getCount() const { return evCount; }

@@ -91,17 +91,18 @@ export default function EVManagement() {
     return Object.keys(errors).length === 0;
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!validate()) return;
+    let success = false;
     if (editEV) {
-      updateEV(editEV.id, {
+      success = await updateEV(editEV.id, {
         owner: formData.owner,
         model: formData.model,
         batteryCapacity: Number(formData.batteryCapacity),
         currentCharge: Number(formData.currentCharge),
       });
     } else {
-      addEV({
+      success = await addEV({
         id: formData.id,
         owner: formData.owner,
         model: formData.model,
@@ -110,7 +111,9 @@ export default function EVManagement() {
         status: 'available' as EVStatus,
       });
     }
-    setFormOpen(false);
+    if (success) {
+      setFormOpen(false);
+    }
   };
 
   const formatDate = (iso: string) => {
