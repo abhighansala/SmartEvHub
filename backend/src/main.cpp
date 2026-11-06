@@ -6,6 +6,7 @@
 #include "../aditya_singh/database/database.h"
 #include "../aditya_singh/services/auth_service.h"
 #include "../aditya_singh/api/auth_routes.h"
+#include "../aditya_singh/security/jwt_util.h"
 
 // Member 2: Priyanshu Dutt (EV Management)
 #include "../priyanshu_dutt/services/ev_service.h"
@@ -32,27 +33,72 @@
 #include "../agreev_singh/api/transaction_routes.h"
 #include "../agreev_singh/api/analytics_routes.h"
 
-int main()
+int main(int argc, char* argv[])
 {
     std::cout << "========================================================\n";
     std::cout << "       Smart EV Hub - Unified C++ Backend Server        \n";
     std::cout << "========================================================\n";
 
-    // 1. Initialize SQLite Database (Aditya Singh)
-    Database db("evhub.db");
+    // 0. Enforce JWT Security Configuration on Startup (Requirement 1)
+    std::string secretErr;
+    if (!security::JwtUtil::validateStartupSecret(secretErr)) {
+        std::cerr << "========================================================\n";
+        std::cerr << " [FATAL SECURITY ERROR] Startup aborted: " << secretErr << "\n";
+        std::cerr << " A securely generated JWT_SECRET environment variable is required.\n";
+        std::cerr << " Minimum key length: 32 characters.\n";
+        std::cerr << "========================================================\n";
+        return 1;
+    }
+
+    // 1. Resolve canonical SQLite Database & Schema path
+    // Ensures consistent persistence whether started from root, backend, or backend/build
+    std::string dbPath = "evhub.db";
+    std::string schemaPath = "";
+
+    std::ifstream checkRootSchema("backend/database/schema.sql");
+    std::ifstream checkBuildSchema("../database/schema.sql");
+    std::ifstream checkBackendSchema("database/schema.sql");
+
+    if (checkRootSchema.good()) {
+        dbPath = "backend/evhub.db";
+        schemaPath = "backend/database/schema.sql";
+    } else if (checkBuildSchema.good()) {
+        dbPath = "../evhub.db";
+        schemaPath = "../database/schema.sql";
+    } else if (checkBackendSchema.good()) {
+        dbPath = "evhub.db";
+        schemaPath = "database/schema.sql";
+    }
+
+    if (argc > 1 && argv[1] != nullptr && std::string(argv[1]).length() > 0) {
+        dbPath = argv[1];
+    }
+
+    int port = 8080;
+    if (argc > 2 && argv[2] != nullptr) {
+        try {
+            port = std::stoi(argv[2]);
+        } catch (...) {
+            port = 8080;
+        }
+    }
+
+    Database db(dbPath);
     if (!db.open()) {
-        std::cerr << "[Warning] Could not open evhub.db. Running in fallback mode.\n";
+        std::cerr << "[Warning] Could not open " << dbPath << ". Running in fallback mode.\n";
     } else {
-        // Initialize schema and seed data if not present
-        if (!db.initSchema("../database/schema.sql") &&
-            !db.initSchema("backend/database/schema.sql") &&
-            !db.initSchema("database/schema.sql")) {
-            std::cerr << "[Warning] Could not load schema.sql\n";
+        if (!schemaPath.empty() && !db.initSchema(schemaPath)) {
+            std::cerr << "[Warning] Could not load schema from: " << schemaPath << "\n";
         }
     }
 
     // 2. Initialize Member Services
     AuthService authService(&db);
+    int migratedPasswords = authService.migratePlaintextPasswords();
+    if (migratedPasswords > 0) {
+        std::cout << "[Security] Migrated " << migratedPasswords << " legacy user password(s) to secure bcrypt hashes.\n";
+    }
+
     EVService evService(&db);
     StationService stationService(&db);
     BatteryService batteryService(&db);
@@ -60,6 +106,14 @@ int main()
     SwapQueue swapQueue;
     TransactionStack txnStack;
     TransactionService txnService(&db);
+
+    // Rehydrate FIFO Charging Queue deterministically from SQLite (waiting EVs ordered by last_activity)
+    int rehydratedEVs = stationService.rehydrateChargingQueue(chargingQueue);
+    std::cout << "[ChargingQueue] Rehydrated " << rehydratedEVs << " waiting EVs from SQLite into FIFO queue.\n";
+
+    // Rehydrate FIFO Swap Queue deterministically from SQLite (waiting swap EVs ordered by last_activity)
+    int rehydratedSwaps = batteryService.rehydrateSwapQueue(swapQueue);
+    std::cout << "[SwapQueue] Rehydrated " << rehydratedSwaps << " waiting swap EVs from SQLite into FIFO queue.\n";
 
     // 3. Setup Crow Application with CORS for React frontend
     crow::App<crow::CORSHandler> app;
@@ -84,18 +138,18 @@ int main()
     registerAuthRoutes(app, authService);
     registerEVRoutes(app, evService);
     registerStationRoutes(app, stationService);
-    registerChargingRoutes(app, stationService);
-    registerBatteryRoutes(app, batteryService);
-    registerSwapRoutes(app, batteryService);
+    registerChargingRoutes(app, stationService, chargingQueue, &txnStack);
+    registerBatteryRoutes(app, batteryService, &swapQueue, &txnStack);
+    registerSwapRoutes(app, batteryService, swapQueue, &txnStack);
     registerDSARoutes(app, chargingQueue, swapQueue, txnStack);
     registerTransactionRoutes(app, txnService);
     registerAnalyticsRoutes(app, txnService);
 
-    std::cout << "\n[Server Ready] Listening on http://localhost:8080\n";
+    std::cout << "\n[Server Ready] Listening on http://localhost:" << port << "\n";
     std::cout << "Press Ctrl+C to stop the server.\n\n";
 
-    // Run on port 8080 (standard for local backend)
-    app.port(8080).run();
+    // Run on configured port (standard 8080 for local backend)
+    app.port(port).run();
 
     return 0;
 }

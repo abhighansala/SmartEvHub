@@ -21,7 +21,10 @@ import PageHeader from '@/components/common/PageHeader';
 import StatCard from '@/components/common/StatCard';
 import { useApp } from '@/context/AppContext';
 
-const weeklyData = [
+import { useState, useEffect } from 'react';
+import { api } from '@/services/api';
+
+const defaultWeeklyData = [
   { day: 'Mon', sessions: 12, swaps: 4 },
   { day: 'Tue', sessions: 15, swaps: 6 },
   { day: 'Wed', sessions: 10, swaps: 3 },
@@ -31,25 +34,43 @@ const weeklyData = [
   { day: 'Sun', sessions: 20, swaps: 8 },
 ];
 
-const stationUtilization = [
-  { station: 'S01', utilization: 65 },
-  { station: 'S02', utilization: 85 },
-  { station: 'S03', utilization: 72 },
-  { station: 'S04', utilization: 90 },
-  { station: 'S05', utilization: 78 },
-  { station: 'S06', utilization: 45 },
+const defaultStationUtilization = [
+  { station: 'CS-1', utilization: 85 },
+  { station: 'CS-2', utilization: 65 },
+  { station: 'CS-3', utilization: 72 },
+  { station: 'CS-4', utilization: 20 },
+  { station: 'CS-5', utilization: 90 },
+  { station: 'CS-6', utilization: 45 },
 ];
 
 export default function Reports() {
   const theme = useTheme();
-  const { transactions, showSnackbar } = useApp();
+  const { transactions, isBackendOnline, showSnackbar } = useApp();
 
-  const totalRevenue = transactions.reduce((s, t) => s + t.amount, 0);
-  const totalEnergy = transactions.reduce((s, t) => s + t.energyDelivered, 0);
-  const chargingSessions = transactions.filter(t => t.type === 'charging').length;
-  const batterySwaps = transactions.filter(t => t.type === 'battery-swap').length;
-  const avgDuration = transactions.length > 0
-    ? Math.round(transactions.reduce((s, t) => s + t.duration, 0) / transactions.length) : 0;
+  const [backendReports, setBackendReports] = useState<any>(null);
+  const [weeklyChartData, setWeeklyChartData] = useState(defaultWeeklyData);
+  const [stationUtilData, setStationUtilData] = useState(defaultStationUtilization);
+
+  useEffect(() => {
+    if (isBackendOnline) {
+      api.getReports().then(rep => {
+        if (rep) setBackendReports(rep);
+      }).catch(() => {});
+
+      api.getAnalytics().then(ana => {
+        if (ana && ana.weeklyData) setWeeklyChartData(ana.weeklyData);
+        if (ana && ana.stationUtilization) setStationUtilData(ana.stationUtilization);
+      }).catch(() => {});
+    }
+  }, [isBackendOnline]);
+
+  const totalRevenue = backendReports?.totalRevenue ?? transactions.reduce((s, t) => s + t.amount, 0);
+  const totalEnergy = backendReports?.totalEnergyDelivered ?? transactions.reduce((s, t) => s + t.energyDelivered, 0);
+  const chargingSessions = backendReports?.chargingSessions ?? transactions.filter(t => t.type === 'charging').length;
+  const batterySwaps = backendReports?.batterySwaps ?? transactions.filter(t => t.type === 'battery-swap').length;
+  const avgDuration = backendReports?.averageDuration ?? (transactions.length > 0
+    ? Math.round(transactions.reduce((s, t) => s + t.duration, 0) / transactions.length) : 0);
+  const avgQueueTime = backendReports?.averageWaitingTime ?? 25;
 
   return (
     <Box>
@@ -95,7 +116,7 @@ export default function Reports() {
           <Card sx={{ p: 3, border: `1px solid ${theme.palette.divider}` }}>
             <Typography variant="h5" sx={{ mb: 2 }}>Sessions & Swaps This Week</Typography>
             <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={weeklyData}>
+              <BarChart data={weeklyChartData}>
                 <CartesianGrid strokeDasharray="3 3" stroke={theme.palette.divider} />
                 <XAxis dataKey="day" tick={{ fill: theme.palette.text.secondary, fontSize: 12 }} />
                 <YAxis tick={{ fill: theme.palette.text.secondary, fontSize: 12 }} />
@@ -117,7 +138,7 @@ export default function Reports() {
           <Card sx={{ p: 3, border: `1px solid ${theme.palette.divider}` }}>
             <Typography variant="h5" sx={{ mb: 2 }}>Station Utilization (%)</Typography>
             <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={stationUtilization} layout="vertical">
+              <BarChart data={stationUtilData} layout="vertical">
                 <CartesianGrid strokeDasharray="3 3" stroke={theme.palette.divider} />
                 <XAxis type="number" domain={[0, 100]} tick={{ fill: theme.palette.text.secondary, fontSize: 12 }} />
                 <YAxis dataKey="station" type="category" tick={{ fill: theme.palette.text.secondary, fontSize: 12 }} width={40} />

@@ -69,6 +69,7 @@ export interface ChargingSession {
   targetCharge: number;     // percentage
   estimatedCost: number;    // INR
   status: SessionStatus;
+  energyConsumed?: number;
 }
 
 // ─── Transaction Types ───────────────────────────────────────────────────────

@@ -1,10 +1,10 @@
 import type { Station } from '@/types';
 
 export const mockStations: Station[] = [
-  { id: 'S01', name: 'Station Alpha', power: 22, connectorType: 'Type 2', status: 'available', currentEV: null, sessionStart: null, location: 'Bay A1' },
-  { id: 'S02', name: 'Station Beta', power: 50, connectorType: 'CCS2', status: 'charging', currentEV: 'EV101', sessionStart: '2026-08-26T09:30:00', location: 'Bay A2' },
-  { id: 'S03', name: 'Station Gamma', power: 22, connectorType: 'Type 2', status: 'charging', currentEV: 'EV104', sessionStart: '2026-08-26T08:45:00', location: 'Bay B1' },
-  { id: 'S04', name: 'Station Delta', power: 150, connectorType: 'CCS2', status: 'charging', currentEV: 'EV106', sessionStart: '2026-08-26T07:00:00', location: 'Bay B2' },
-  { id: 'S05', name: 'Station Epsilon', power: 50, connectorType: 'CHAdeMO', status: 'charging', currentEV: 'EV111', sessionStart: '2026-08-26T08:00:00', location: 'Bay C1' },
-  { id: 'S06', name: 'Station Zeta', power: 22, connectorType: 'Type 2', status: 'available', currentEV: null, sessionStart: null, location: 'Bay C2' },
+  { id: 'CS-1', name: 'Standard Bay 1', power: 25, connectorType: 'CCS2', status: 'charging', currentEV: 'EV-101', sessionStart: '2026-08-26T09:30:00', location: 'Bay A-1' },
+  { id: 'CS-2', name: 'Fast Bay 2', power: 29, connectorType: 'CCS2', status: 'available', currentEV: null, sessionStart: null, location: 'Bay A-2' },
+  { id: 'CS-3', name: 'Flex Bay 3', power: 28, connectorType: 'CCS2', status: 'available', currentEV: null, sessionStart: null, location: 'Bay B-1' },
+  { id: 'CS-4', name: 'AC Type 2 Charger 4', power: 26, connectorType: 'Type 2', status: 'maintenance', currentEV: null, sessionStart: null, location: 'Bay B-2' },
+  { id: 'CS-5', name: 'High-Power Bay 5', power: 50, connectorType: 'CCS2', status: 'available', currentEV: null, sessionStart: null, location: 'Bay C-1' },
+  { id: 'CS-6', name: 'Standard Bay 6', power: 22, connectorType: 'Type 2', status: 'available', currentEV: null, sessionStart: null, location: 'Bay C-2' },
 ];

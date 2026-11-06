@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import Box from '@mui/material/Box';
 import Card from '@mui/material/Card';
 import Typography from '@mui/material/Typography';
@@ -11,9 +12,16 @@ import TableRow from '@mui/material/TableRow';
 import IconButton from '@mui/material/IconButton';
 import Tooltip from '@mui/material/Tooltip';
 import Chip from '@mui/material/Chip';
+import Dialog from '@mui/material/Dialog';
+import DialogTitle from '@mui/material/DialogTitle';
+import DialogContent from '@mui/material/DialogContent';
+import DialogActions from '@mui/material/DialogActions';
+import TextField from '@mui/material/TextField';
+import MenuItem from '@mui/material/MenuItem';
 import { useTheme, alpha } from '@mui/material/styles';
 
 import PlayArrowOutlined from '@mui/icons-material/PlayArrowOutlined';
+import AddOutlined from '@mui/icons-material/AddOutlined';
 import DeleteOutline from '@mui/icons-material/DeleteOutline';
 import ArrowForwardOutlined from '@mui/icons-material/ArrowForwardOutlined';
 
@@ -24,7 +32,25 @@ import { useApp } from '@/context/AppContext';
 
 export default function ChargingQueue() {
   const theme = useTheme();
-  const { chargingQueue, chargingQueueMeta, processNextCharging, removeChargingRequest } = useApp();
+  const { chargingQueue, chargingQueueMeta, processNextCharging, removeChargingRequest, addChargingRequest, evs } = useApp();
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [selectedEvId, setSelectedEvId] = useState('');
+  const [priority, setPriority] = useState<'normal' | 'urgent'>('normal');
+
+  const handleRequest = () => {
+    if (!selectedEvId) return;
+    const ev = evs.find(e => e.id === selectedEvId);
+    addChargingRequest({
+      evId: selectedEvId,
+      evModel: ev?.model || 'Unknown Model',
+      owner: ev?.owner || 'Unknown Owner',
+      currentCharge: ev?.currentCharge ?? 20,
+      priority,
+    });
+    setDialogOpen(false);
+    setSelectedEvId('');
+    setPriority('normal');
+  };
 
   const getWaitTime = (requestedAt: string) => {
     const diff = Date.now() - new Date(requestedAt).getTime();
@@ -37,14 +63,23 @@ export default function ChargingQueue() {
         title="Charging Queue"
         subtitle="FIFO Circular Queue for charging requests — Abhishek Ghansala (UI + DSA Module)"
         action={
-          <Button
-            variant="contained"
-            startIcon={<PlayArrowOutlined />}
-            onClick={processNextCharging}
-            disabled={chargingQueue.length === 0}
-          >
-            Process Next (Dequeue)
-          </Button>
+          <Box sx={{ display: 'flex', gap: 1.5 }}>
+            <Button
+              variant="outlined"
+              startIcon={<AddOutlined />}
+              onClick={() => setDialogOpen(true)}
+            >
+              Request Charging
+            </Button>
+            <Button
+              variant="contained"
+              startIcon={<PlayArrowOutlined />}
+              onClick={processNextCharging}
+              disabled={chargingQueue.length === 0}
+            >
+              Process Next (Dequeue)
+            </Button>
+          </Box>
         }
       />
 
@@ -188,6 +223,48 @@ export default function ChargingQueue() {
           </TableContainer>
         )}
       </Card>
+
+      {/* Request Charging Dialog */}
+      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Request Charging</DialogTitle>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2.5, pt: '16px !important' }}>
+          <TextField
+            select
+            label="Select Electric Vehicle"
+            value={selectedEvId}
+            onChange={e => setSelectedEvId(e.target.value)}
+            required
+            fullWidth
+          >
+            {evs.map(ev => (
+              <MenuItem key={ev.id} value={ev.id}>
+                {ev.id} — {ev.model} ({ev.currentCharge}%)
+              </MenuItem>
+            ))}
+          </TextField>
+
+          <TextField
+            select
+            label="Priority"
+            value={priority}
+            onChange={e => setPriority(e.target.value as 'normal' | 'urgent')}
+            fullWidth
+          >
+            <MenuItem value="normal">Normal Priority</MenuItem>
+            <MenuItem value="urgent">Urgent Priority</MenuItem>
+          </TextField>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setDialogOpen(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={handleRequest}
+            disabled={!selectedEvId}
+          >
+            Submit Request
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

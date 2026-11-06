@@ -3,16 +3,20 @@
 // Role: UI + DSA + Final Integration
 // Owner: Abhishek Ghansala (Student ID: 2518132, Section H)
 // Connects the React UI to the C++ Crow Backend on http://localhost:8080
+// Features: Bearer JWT Authorization, robust error handling, full CRUD
 // ============================================================================
 
 const API_BASE = 'http://localhost:8080/api';
 
-// Helper to make fetch requests with timeout and error handling
+// Helper to make fetch requests with auth token, timeout and error handling
 async function request(endpoint: string, options: RequestInit = {}) {
   const url = `${API_BASE}${endpoint}`;
-  const headers = {
+  const token = localStorage.getItem('authToken');
+
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...(options.headers || {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(options.headers as Record<string, string> || {}),
   };
 
   const response = await fetch(url, {
@@ -21,6 +25,12 @@ async function request(endpoint: string, options: RequestInit = {}) {
   });
 
   if (!response.ok) {
+    if (response.status === 401 && endpoint !== '/login' && endpoint !== '/register') {
+      // Clear expired token on unauthorized API call
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('currentUser');
+      window.dispatchEvent(new Event('evhub-auth-expired'));
+    }
     const errorData = await response.json().catch(() => ({}));
     const message = errorData.message || `Request failed with status ${response.status}`;
     throw new Error(message);
@@ -36,17 +46,32 @@ export const api = {
   },
 
   // 1. Authentication (Aditya Singh backend module)
-  async login(email: string, password: string) {
+  async login(emailOrUsername: string, password: string) {
     return request('/login', {
       method: 'POST',
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email: emailOrUsername, password }),
     });
+  },
+
+  async register(name: string, email: string, password: string, role: string = 'user') {
+    return request('/register', {
+      method: 'POST',
+      body: JSON.stringify({ name, email, password, role }),
+    });
+  },
+
+  async getMe() {
+    return request('/me');
   },
 
   async logout() {
     return request('/logout', {
       method: 'POST',
     });
+  },
+
+  async getUsers() {
+    return request('/users');
   },
 
   // 2. DSA Charging Queue (Abhishek Ghansala module)
@@ -133,6 +158,25 @@ export const api = {
     return request('/stations');
   },
 
+  async getSessions(status?: string) {
+    const query = status ? `?status=${encodeURIComponent(status)}` : '';
+    return request(`/sessions${query}`);
+  },
+
+  async requestCharging(evId: string, targetCharge: number = 85.0) {
+    return request('/charging/request', {
+      method: 'POST',
+      body: JSON.stringify({ evId, targetCharge }),
+    });
+  },
+
+  async updateStationStatus(id: string, status: string) {
+    return request(`/stations/${id}/status`, {
+      method: 'PUT',
+      body: JSON.stringify({ status }),
+    });
+  },
+
   async completeCharging(stationId: string) {
     return request('/charging/complete', {
       method: 'POST',
@@ -145,6 +189,20 @@ export const api = {
     return request('/batteries');
   },
 
+  async createBattery(battery: any) {
+    return request('/batteries', {
+      method: 'POST',
+      body: JSON.stringify(battery),
+    });
+  },
+
+  async updateBattery(id: string, battery: any) {
+    return request(`/batteries/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(battery),
+    });
+  },
+
   async requestSwap(evId: string, currentBattery?: string, requiredCapacity?: number) {
     return request('/swap/request', {
       method: 'POST',
@@ -152,9 +210,21 @@ export const api = {
     });
   },
 
+  async processSwap(evId?: string) {
+    return request('/swap/process', {
+      method: 'POST',
+      body: JSON.stringify({ evId }),
+    });
+  },
+
+  async getSwapAvailableCount() {
+    return request('/swap/available-count');
+  },
+
   // 8. Transactions & Reports (Agreev Singh module)
-  async getTransactions() {
-    return request('/transactions');
+  async getTransactions(type?: string) {
+    const query = type ? `?type=${encodeURIComponent(type)}` : '';
+    return request(`/transactions${query}`);
   },
 
   async createTransaction(txn: any) {

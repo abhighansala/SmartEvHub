@@ -45,6 +45,12 @@ public:
 
     // Copy queue elements into an array for API output
     int getItems(std::string outArray[], int maxCapacity) const;
+
+    // Reset queue to empty state (for rehydration / tests)
+    void clear();
+
+    // Check if vehicleId is already waiting in queue
+    bool contains(const std::string& vehicleId) const;
 };
 
 #endif

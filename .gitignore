@@ -54,3 +54,6 @@ next-env.d.ts
 
 # Auxiliary development runtime
 backend/aditya_runtime/
+
+# Aider temporary chat artifacts
+.aider*

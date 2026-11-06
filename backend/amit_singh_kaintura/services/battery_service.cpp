@@ -1,5 +1,6 @@
 #include "battery_service.h"
 #include <iostream>
+#include <ctime>
 
 // ============================================================================
 // Smart EV Hub - Battery Service Implementation
@@ -155,15 +156,15 @@ bool BatteryService::findReadyBattery(double requiredCapacity, Battery& outBatte
 // ----------------------------------------------------------------------------
 // 6. Standard Battery Swap
 // ----------------------------------------------------------------------------
-bool BatteryService::performSwap(const std::string& evId, Battery& outGivenBattery) {
-    return performSwap(evId, "", 0.0, outGivenBattery);
+bool BatteryService::performSwap(const std::string& evId, Battery& outGivenBattery, Transaction* outTxn) {
+    return performSwap(evId, "", 0.0, outGivenBattery, outTxn);
 }
 
 // ----------------------------------------------------------------------------
-// 7. Full Battery Swap Workflow
+// 7. Full Battery Swap Workflow (Atomic SQLite Transaction with Rollback Safety)
 // ----------------------------------------------------------------------------
 bool BatteryService::performSwap(const std::string& evId, const std::string& oldBatteryId,
-                                 double requiredCapacity, Battery& outGivenBattery) {
+                                 double requiredCapacity, Battery& outGivenBattery, Transaction* outTxn) {
     // Step 1: Find a ready battery matching requested specifications
     bool found = false;
     if (requiredCapacity > 0.0) {
@@ -178,39 +179,82 @@ bool BatteryService::performSwap(const std::string& evId, const std::string& old
     }
 
     std::string newBatteryId = outGivenBattery.getId();
+    static int swapTxCounter = 7000;
+    std::string txnId = "TXN-SWAP-" + std::to_string(swapTxCounter++) + "-" + std::to_string(time(nullptr) % 10000);
+    double swapAmount = Transaction::calculateTariff(outGivenBattery.getCapacity(), "battery-swap");
+    double energyDelivered = outGivenBattery.getCapacity() * 0.8;
+    int duration = 5; // standard swap time in minutes
+    std::string desc = "Battery swap: fresh " + newBatteryId + " (" + std::to_string((int)outGivenBattery.getCapacity()) + " kWh)";
 
-    // Step 2: Database updates if SQLite is active
+    // Step 2: Database updates if SQLite is active (Atomic Transaction with Rollback)
     if (db != nullptr && db->isOpen()) {
         sqlite3* handle = db->getDbHandle();
+        if (!db->beginTransaction()) {
+            return false;
+        }
 
+        bool okNew = false;
         // 2a. Mark newly allocated battery as 'inuse' and assign vehicle ID
         std::string sqlNew = "UPDATE Battery SET status = 'inuse', current_vehicle = ? WHERE id = ?;";
         sqlite3_stmt* stmtNew = nullptr;
         if (sqlite3_prepare_v2(handle, sqlNew.c_str(), -1, &stmtNew, nullptr) == SQLITE_OK) {
             sqlite3_bind_text(stmtNew, 1, evId.c_str(), -1, SQLITE_STATIC);
             sqlite3_bind_text(stmtNew, 2, newBatteryId.c_str(), -1, SQLITE_STATIC);
-            sqlite3_step(stmtNew);
+            int rc = sqlite3_step(stmtNew);
             sqlite3_finalize(stmtNew);
+            if (rc == SQLITE_DONE) okNew = true;
         }
 
         // 2b. If old battery ID was specified, place it into the charging dock
+        bool okOld = true;
         if (!oldBatteryId.empty()) {
+            okOld = false;
             std::string sqlOld = "UPDATE Battery SET status = 'charging', charge_level = 15.0, current_vehicle = NULL WHERE id = ?;";
             sqlite3_stmt* stmtOld = nullptr;
             if (sqlite3_prepare_v2(handle, sqlOld.c_str(), -1, &stmtOld, nullptr) == SQLITE_OK) {
                 sqlite3_bind_text(stmtOld, 1, oldBatteryId.c_str(), -1, SQLITE_STATIC);
-                sqlite3_step(stmtOld);
+                int rc = sqlite3_step(stmtOld);
                 sqlite3_finalize(stmtOld);
+                if (rc == SQLITE_DONE) okOld = true;
             }
         }
 
-        // 2c. Update vehicle status to available and battery charge to 100% in EV table
-        std::string sqlEV = "UPDATE EV SET current_charge = 100.0, status = 'available' WHERE id = ?;";
+        // 2c. Update vehicle status to available and battery charge to fresh battery's charge level in EV table
+        bool okEV = false;
+        std::string sqlEV = "UPDATE EV SET current_charge = ?, status = 'available', last_activity = datetime('now') WHERE id = ?;";
         sqlite3_stmt* stmtEV = nullptr;
         if (sqlite3_prepare_v2(handle, sqlEV.c_str(), -1, &stmtEV, nullptr) == SQLITE_OK) {
-            sqlite3_bind_text(stmtEV, 1, evId.c_str(), -1, SQLITE_STATIC);
-            sqlite3_step(stmtEV);
+            sqlite3_bind_double(stmtEV, 1, outGivenBattery.getChargeLevel());
+            sqlite3_bind_text(stmtEV, 2, evId.c_str(), -1, SQLITE_STATIC);
+            int rc = sqlite3_step(stmtEV);
             sqlite3_finalize(stmtEV);
+            if (rc == SQLITE_DONE) okEV = true;
+        }
+
+        // 2d. Insert completed TransactionLog record
+        bool okTxn = false;
+        std::string sqlTxn = "INSERT INTO TransactionLog (id, vehicle_id, type, station_or_battery, description, amount, energy_delivered, duration, timestamp, status) "
+                             "VALUES (?, ?, 'battery-swap', ?, ?, ?, ?, ?, datetime('now'), 'completed');";
+        sqlite3_stmt* stmtTxn = nullptr;
+        if (sqlite3_prepare_v2(handle, sqlTxn.c_str(), -1, &stmtTxn, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(stmtTxn, 1, txnId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmtTxn, 2, evId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmtTxn, 3, newBatteryId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmtTxn, 4, desc.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_double(stmtTxn, 5, swapAmount);
+            sqlite3_bind_double(stmtTxn, 6, energyDelivered);
+            sqlite3_bind_int(stmtTxn, 7, duration);
+            int rc = sqlite3_step(stmtTxn);
+            sqlite3_finalize(stmtTxn);
+            if (rc == SQLITE_DONE) okTxn = true;
+        }
+
+        if (okNew && okOld && okEV && okTxn) {
+            db->commitTransaction();
+        } else {
+            db->rollbackTransaction();
+            std::cerr << "[Battery Service Error] Battery swap transaction failed! Changes rolled back.\n";
+            return false;
         }
     }
 
@@ -228,10 +272,135 @@ bool BatteryService::performSwap(const std::string& evId, const std::string& old
         }
     }
 
+    if (outTxn != nullptr) {
+        *outTxn = Transaction(txnId, evId, "battery-swap", newBatteryId, desc, swapAmount, energyDelivered, duration, "completed");
+    }
+
     std::cout << "[Battery Service] Swap successful: EV " << evId
               << " assigned fresh battery " << newBatteryId << ".\n";
     return true;
 }
+
+// ----------------------------------------------------------------------------
+// 8. Rehydrate FIFO Swap Queue from SQLite (Deterministic Tie-Breaker)
+// ----------------------------------------------------------------------------
+int BatteryService::rehydrateSwapQueue(SwapQueue& queue) {
+    queue.clear();
+    int count = 0;
+    if (db != nullptr && db->isOpen()) {
+        sqlite3* handle = db->getDbHandle();
+        // Deterministic FIFO: last_activity ASC, registered_at ASC, rowid ASC
+        std::string sql = "SELECT id FROM EV WHERE status = 'swapping' ORDER BY last_activity ASC, registered_at ASC, rowid ASC;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(handle, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
+            while (sqlite3_step(stmt) == SQLITE_ROW && count < SWAP_QUEUE_CAPACITY) {
+                const char* idText = (const char*)sqlite3_column_text(stmt, 0);
+                if (idText && !queue.isFull()) {
+                    queue.enqueue(idText);
+                    count++;
+                }
+            }
+            sqlite3_finalize(stmt);
+        }
+    }
+    return count;
+}
+
+// ----------------------------------------------------------------------------
+// 9. Enqueue EV when no ready battery is available
+// ----------------------------------------------------------------------------
+bool BatteryService::enqueueWaitingSwap(const std::string& evId, SwapQueue& queue) {
+    if (queue.isFull()) {
+        return false;
+    }
+    if (queue.contains(evId)) {
+        return false;
+    }
+
+    if (db != nullptr && db->isOpen()) {
+        sqlite3* handle = db->getDbHandle();
+        // Verify EV exists and is not currently charging
+        std::string checkSql = "SELECT status FROM EV WHERE id = ?;";
+        sqlite3_stmt* checkStmt = nullptr;
+        if (sqlite3_prepare_v2(handle, checkSql.c_str(), -1, &checkStmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(checkStmt, 1, evId.c_str(), -1, SQLITE_STATIC);
+            if (sqlite3_step(checkStmt) == SQLITE_ROW) {
+                const char* statText = (const char*)sqlite3_column_text(checkStmt, 0);
+                std::string st = statText ? statText : "";
+                sqlite3_finalize(checkStmt);
+                if (st == "charging") {
+                    return false; // Cannot swap while actively charging
+                }
+            } else {
+                sqlite3_finalize(checkStmt);
+                return false; // EV does not exist
+            }
+        }
+
+        std::string sql = "UPDATE EV SET status = 'swapping', last_activity = datetime('now') WHERE id = ?;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(handle, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, evId.c_str(), -1, SQLITE_STATIC);
+            int rc = sqlite3_step(stmt);
+            sqlite3_finalize(stmt);
+            if (rc != SQLITE_DONE || sqlite3_changes(handle) != 1) {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+
+    return queue.enqueue(evId);
+}
+
+// ----------------------------------------------------------------------------
+// 10. Process oldest queued request atomically
+// ----------------------------------------------------------------------------
+bool BatteryService::processNextSwap(SwapQueue& queue, Battery& outGivenBattery, Transaction& outTxn, TransactionStack* txnStack) {
+    if (queue.isEmpty()) {
+        return false;
+    }
+
+    std::string evId = queue.peek();
+    if (evId.empty()) return false;
+
+    // Verify ready battery exists before mutating queue
+    Battery checkBat;
+    if (!findReadyBattery(checkBat)) {
+        std::cerr << "[Battery Service] Inventory exhausted. Cannot process queued EV " << evId << "\n";
+        return false;
+    }
+
+    // Snapshot queue for rollback safety across memory and SQLite
+    SwapQueue queueBackup = queue;
+    std::string dequeued = queue.dequeue();
+
+    if (!performSwap(dequeued, "", 0.0, outGivenBattery, &outTxn)) {
+        // Roll back in-memory queue so EV is never lost on database failure
+        queue = queueBackup;
+        std::cerr << "[Battery Service Error] performSwap failed for " << dequeued << ". Restored SwapQueue.\n";
+        return false;
+    }
+
+    // Push transaction to stack ONLY after commit succeeds
+    if (txnStack != nullptr) {
+        txnStack->push(outTxn.getId());
+    }
+
+    return true;
+}
+
+// ----------------------------------------------------------------------------
+// 11. Dispatch next swap if battery is available
+// ----------------------------------------------------------------------------
+bool BatteryService::dispatchNextSwapIfAvailable(SwapQueue& queue, Battery& outGivenBattery, Transaction& outTxn, TransactionStack* txnStack) {
+    if (!queue.isEmpty() && getReadyCount() > 0) {
+        return processNextSwap(queue, outGivenBattery, outTxn, txnStack);
+    }
+    return false;
+}
+
 
 // ----------------------------------------------------------------------------
 // 8. Add a new battery to inventory

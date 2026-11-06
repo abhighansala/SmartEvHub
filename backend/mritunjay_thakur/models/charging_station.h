@@ -14,6 +14,7 @@ private:
     std::string status;           // "available", "charging", "maintenance", "offline"
     std::string currentVehicleId; // ID of EV currently charging, or empty
     std::string location;         // e.g., "Bay A-1"
+    std::string sessionStart;     // e.g. "2026-08-26T09:30:00" or empty
 
 public:
     ChargingStation() {
@@ -24,11 +25,13 @@ public:
         status = "available";
         currentVehicleId = "";
         location = "Bay 1";
+        sessionStart = "";
     }
 
     ChargingStation(std::string sId, std::string sName, double sPower,
                     std::string sConnector, std::string sStatus = "available",
-                    std::string vehicleId = "", std::string sLocation = "Bay 1") {
+                    std::string vehicleId = "", std::string sLocation = "Bay 1",
+                    std::string sSessionStart = "") {
         id = sId;
         name = sName;
         power = sPower;
@@ -36,6 +39,7 @@ public:
         status = sStatus;
         currentVehicleId = vehicleId;
         location = sLocation;
+        sessionStart = sSessionStart;
     }
 
     // Getters
@@ -46,6 +50,7 @@ public:
     std::string getStatus() const { return status; }
     std::string getCurrentVehicleId() const { return currentVehicleId; }
     std::string getLocation() const { return location; }
+    std::string getSessionStart() const { return sessionStart; }
 
     // Setters
     void setId(const std::string& newId) { id = newId; }
@@ -55,6 +60,7 @@ public:
     void setStatus(const std::string& newStatus) { status = newStatus; }
     void setCurrentVehicleId(const std::string& vehicleId) { currentVehicleId = vehicleId; }
     void setLocation(const std::string& newLocation) { location = newLocation; }
+    void setSessionStart(const std::string& start) { sessionStart = start; }
 
     // Helper: is station ready to accept an EV?
     bool isAvailable() const {

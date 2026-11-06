@@ -16,6 +16,7 @@ import { api } from '@/services/api';
 // Smart EV Hub - Central Application Context & State Management
 // Module Owner: Abhishek Ghansala (UI + DSA + Final Integration, ID: 2518132)
 // Manages operational state and synchronizes with C++ backend & manual DSA
+// Features: Optimistic updates with automatic rollback, JWT token storage, live simulation
 // ============================================================================
 
 export interface DSAMetadata {
@@ -50,28 +51,28 @@ interface AppContextType {
   transactionStackMeta: StackMetadata;
   refreshBackendData: () => Promise<void>;
 
-  // EV CRUD
-  addEV: (ev: Omit<EV, 'lastActivity' | 'registeredAt'>) => void;
-  updateEV: (id: string, data: Partial<EV>) => void;
-  deleteEV: (id: string) => void;
+  // EV CRUD (Optimistic with Rollback)
+  addEV: (ev: Omit<EV, 'lastActivity' | 'registeredAt'>) => Promise<void>;
+  updateEV: (id: string, data: Partial<EV>) => Promise<void>;
+  deleteEV: (id: string) => Promise<void>;
 
-  // Station operations
-  updateStation: (id: string, data: Partial<Station>) => void;
+  // Station operations (Optimistic with Rollback)
+  updateStation: (id: string, data: Partial<Station>) => Promise<void>;
 
-  // Battery operations
-  addBattery: (battery: Omit<Battery, 'lastUpdated'>) => void;
-  updateBattery: (id: string, data: Partial<Battery>) => void;
+  // Battery operations (Optimistic with Rollback)
+  addBattery: (battery: Omit<Battery, 'lastUpdated'>) => Promise<void>;
+  updateBattery: (id: string, data: Partial<Battery>) => Promise<void>;
 
   // Queue operations
   processNextCharging: () => Promise<ChargingRequest | null>;
   removeChargingRequest: (id: string) => void;
-  addChargingRequest: (req: Omit<ChargingRequest, 'id' | 'requestedAt'>) => void;
+  addChargingRequest: (req: Omit<ChargingRequest, 'id' | 'requestedAt'>) => Promise<void>;
   processNextSwap: () => Promise<SwapRequest | null>;
   removeSwapRequest: (id: string) => void;
-  addSwapRequest: (req: Omit<SwapRequest, 'id' | 'requestedAt'>) => void;
+  addSwapRequest: (req: Omit<SwapRequest, 'id' | 'requestedAt'>) => Promise<void>;
 
   // Session operations
-  completeSession: (sessionId: string) => Promise<Transaction | null>;
+  completeSession: (sessionId: string) => Promise<any>;
 
   // Notification operations
   markNotificationRead: (id: string) => void;
@@ -82,10 +83,10 @@ interface AppContextType {
   updateSettings: (settings: Partial<AppSettings>) => void;
   toggleTheme: () => void;
 
-  // Auth
+  // Auth & Token Management
   isAuthenticated: boolean;
   currentUser: User | null;
-  login: (user: User) => void;
+  login: (user: User, token?: string) => void;
   logout: () => void;
 
   // Snackbar
@@ -152,10 +153,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   });
   const isAuthenticated = !!currentUser;
 
-  const login = useCallback((user: User) => {
+  const login = useCallback((user: User, token?: string) => {
     setCurrentUser(user);
     localStorage.setItem('currentUser', JSON.stringify(user));
-    showSnackbar(`Welcome, ${user.name}`, 'success');
+    if (token) {
+      localStorage.setItem('authToken', token);
+    }
+    showSnackbar(`Welcome back, ${user.name}!`, 'success');
   }, [showSnackbar]);
 
   const logout = useCallback(async () => {
@@ -168,20 +172,58 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
     setCurrentUser(null);
     localStorage.removeItem('currentUser');
+    localStorage.removeItem('authToken');
     showSnackbar('Logged out successfully', 'info');
   }, [isBackendOnline, showSnackbar]);
 
-  // Synchronize with C++ Crow Backend on Startup
+  // Handle Token Expiration events from API Client
+  useEffect(() => {
+    const handleExpired = () => {
+      setCurrentUser(null);
+      localStorage.removeItem('currentUser');
+      localStorage.removeItem('authToken');
+      showSnackbar('Your session has expired. Please sign in again.', 'warning');
+    };
+    window.addEventListener('evhub-auth-expired', handleExpired);
+    return () => window.removeEventListener('evhub-auth-expired', handleExpired);
+  }, [showSnackbar]);
+
+  // Validate stored JWT on initial boot
+  useEffect(() => {
+    const token = localStorage.getItem('authToken');
+    if (token) {
+      api.getMe()
+        .then(res => {
+          if (res && res.success && res.user) {
+            setCurrentUser(res.user);
+            localStorage.setItem('currentUser', JSON.stringify(res.user));
+          }
+        })
+        .catch(() => {
+          // Token expired or invalid, clear stored creds
+          localStorage.removeItem('authToken');
+          localStorage.removeItem('currentUser');
+          setCurrentUser(null);
+        });
+    }
+  }, []);
+
+  // Synchronize with C++ Crow Backend
   const refreshBackendData = useCallback(async () => {
     try {
       await api.checkHealth();
       setIsBackendOnline(true);
 
-      // Fetch live DSA Queue and Stack metadata from C++
-      const [cQueue, sQueue, tStack] = await Promise.all([
+      // Fetch live DSA Queues, Stack, entities, sessions & transactions in parallel
+      const [cQueue, sQueue, tStack, backendEVs, backendStations, backendBatteries, backendTxns, backendSessions] = await Promise.all([
         api.getChargingQueue().catch(() => null),
         api.getSwapQueue().catch(() => null),
         api.getTransactionStack().catch(() => null),
+        api.getEVs().catch(() => null),
+        api.getStations().catch(() => null),
+        api.getBatteries().catch(() => null),
+        api.getTransactions().catch(() => null),
+        api.getSessions().catch(() => null),
       ]);
 
       if (cQueue) {
@@ -210,115 +252,237 @@ export function AppProvider({ children }: { children: ReactNode }) {
         });
       }
 
-      // Fetch live entities from SQLite
-      const [backendEVs, backendStations, backendBatteries, backendTxns] = await Promise.all([
-        api.getEVs().catch(() => null),
-        api.getStations().catch(() => null),
-        api.getBatteries().catch(() => null),
-        api.getTransactions().catch(() => null),
-      ]);
-
-      if (backendEVs && Array.isArray(backendEVs) && backendEVs.length > 0) {
+      // Update SQLite entity states
+      let effectiveEVs = evs;
+      if (backendEVs && Array.isArray(backendEVs)) {
         setEVs(backendEVs);
+        effectiveEVs = backendEVs;
       }
-      if (backendStations && Array.isArray(backendStations) && backendStations.length > 0) {
+      if (backendStations && Array.isArray(backendStations)) {
         setStations(backendStations);
       }
-      if (backendBatteries && Array.isArray(backendBatteries) && backendBatteries.length > 0) {
+      if (backendBatteries && Array.isArray(backendBatteries)) {
         setBatteries(backendBatteries);
       }
-      if (backendTxns && Array.isArray(backendTxns) && backendTxns.length > 0) {
+      if (backendTxns && Array.isArray(backendTxns)) {
         setTransactions(backendTxns);
       }
+      if (backendSessions && Array.isArray(backendSessions)) {
+        setSessions(backendSessions);
+      }
+
+      // Hydrate visual queues from C++ array buffers
+      if (cQueue && Array.isArray(cQueue.items)) {
+        const queueRequests: ChargingRequest[] = cQueue.items.map((evId: string, index: number) => {
+          const ev = effectiveEVs.find((e: any) => e.id === evId);
+          return {
+            id: `CQ-${evId}-${index}`,
+            evId: evId,
+            evModel: ev?.model || 'Electric Vehicle',
+            owner: ev?.owner || 'Fleet Operator',
+            currentCharge: ev?.currentCharge ?? 20,
+            requestedAt: ev?.lastActivity || new Date().toISOString(),
+            priority: 'normal',
+          };
+        });
+        setChargingQueue(queueRequests);
+      }
+
+      if (sQueue && Array.isArray(sQueue.items)) {
+        const swapRequests: SwapRequest[] = sQueue.items.map((evId: string, index: number) => {
+          const ev = effectiveEVs.find((e: any) => e.id === evId);
+          return {
+            id: `SQ-${evId}-${index}`,
+            evId: evId,
+            evModel: ev?.model || 'Electric Vehicle',
+            owner: ev?.owner || 'Fleet Operator',
+            currentBattery: 'Current',
+            requiredCapacity: ev?.batteryCapacity || 50.0,
+            requestedAt: ev?.lastActivity || new Date().toISOString(),
+          };
+        });
+        setSwapQueue(swapRequests);
+      }
     } catch (err) {
-      // Backend not running, stay in standalone prototype mode
       setIsBackendOnline(false);
     }
-  }, []);
+  }, [evs]);
 
   useEffect(() => {
     refreshBackendData();
   }, [refreshBackendData]);
 
-  // ─── EV CRUD ─────────────────────────────────────────────
+  // ─── Live Charging Simulation Engine ─────────────────────
+  useEffect(() => {
+    const hasActiveSessions = sessions.some(s => s.status === 'active');
+    if (!hasActiveSessions) return;
+
+    const interval = setInterval(() => {
+      setSessions(prevSessions => {
+        let changed = false;
+        const updated = prevSessions.map(session => {
+          if (session.status !== 'active') return session;
+
+          const currentSoC = session.batteryEnd ?? session.batteryStart;
+          if (currentSoC < session.targetCharge) {
+            changed = true;
+            const station = stations.find(s => s.id === session.stationId);
+            const power = station?.power || 25;
+            const increment = Math.max(1, Math.round((power / 25) * 1.5));
+            const nextSoC = Math.min(session.targetCharge, currentSoC + increment);
+
+            // Synchronize with EV state
+            setEVs(prevEVs => prevEVs.map(ev =>
+              ev.id === session.evId ? { ...ev, currentCharge: nextSoC } : ev
+            ));
+
+            return {
+              ...session,
+              batteryEnd: nextSoC,
+              energyConsumed: Math.round(((nextSoC - session.batteryStart) * 0.45) * 10) / 10,
+            };
+          }
+          return session;
+        });
+
+        return changed ? updated : prevSessions;
+      });
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [sessions, stations]);
+
+  // ─── EV CRUD with Optimistic UI & Automatic Rollback ─────
   const addEV = useCallback(async (ev: Omit<EV, 'lastActivity' | 'registeredAt'>) => {
     const now = new Date().toISOString();
     const newEV = { ...ev, lastActivity: now, registeredAt: now };
-    setEVs(prev => [...prev, newEV]);
-    showSnackbar(`EV ${ev.id} registered successfully`);
+    const prevEVs = evs;
 
-    // Persist to C++ backend if online
+    // Optimistic UI update
+    setEVs(prev => [...prev, newEV]);
+
     if (isBackendOnline) {
       try {
         await api.createEV(newEV);
+        showSnackbar(`EV ${ev.id} registered in SQLite database`, 'success');
       } catch (e: any) {
-        console.error('Failed to sync EV to backend:', e.message);
+        // Rollback state on error
+        setEVs(prevEVs);
+        showSnackbar(`Failed to register EV on server: ${e.message}. Rolled back changes.`, 'error');
       }
+    } else {
+      showSnackbar(`EV ${ev.id} registered locally (offline mode)`, 'info');
     }
-  }, [isBackendOnline, showSnackbar]);
+  }, [evs, isBackendOnline, showSnackbar]);
 
   const updateEV = useCallback(async (id: string, data: Partial<EV>) => {
+    const prevEVs = evs;
     setEVs(prev => prev.map(ev => ev.id === id ? { ...ev, ...data } : ev));
+
     if (isBackendOnline) {
       try {
         await api.updateEV(id, data);
-      } catch (e) {
-        // silently fallback
+        showSnackbar(`EV ${id} updated successfully`, 'success');
+      } catch (e: any) {
+        // Rollback state on error
+        setEVs(prevEVs);
+        showSnackbar(`Failed to update EV: ${e.message}. Rolled back.`, 'error');
       }
     }
-  }, [isBackendOnline]);
+  }, [evs, isBackendOnline, showSnackbar]);
 
   const deleteEV = useCallback(async (id: string) => {
+    const prevEVs = evs;
     setEVs(prev => prev.filter(ev => ev.id !== id));
-    showSnackbar(`EV ${id} removed`);
+
     if (isBackendOnline) {
       try {
         await api.deleteEV(id);
-      } catch (e) {
-        // silently fallback
+        showSnackbar(`EV ${id} removed from SQLite registry`, 'info');
+      } catch (e: any) {
+        // Rollback state on error
+        setEVs(prevEVs);
+        showSnackbar(`Failed to delete EV: ${e.message}. Rolled back.`, 'error');
+      }
+    } else {
+      showSnackbar(`EV ${id} removed`, 'info');
+    }
+  }, [evs, isBackendOnline, showSnackbar]);
+
+  // ─── Station with Optimistic UI & Automatic Rollback ──────
+  const updateStation = useCallback(async (id: string, data: Partial<Station>) => {
+    const prevStations = stations;
+    setStations(prev => prev.map(s => s.id === id ? { ...s, ...data } : s));
+
+    if (isBackendOnline && data.status) {
+      try {
+        await api.updateStationStatus(id, data.status);
+        showSnackbar(`Station ${id} status set to ${data.status}`, 'success');
+      } catch (e: any) {
+        // Rollback on error
+        setStations(prevStations);
+        showSnackbar(`Failed to sync station status: ${e.message}. Rolled back.`, 'error');
       }
     }
-  }, [isBackendOnline, showSnackbar]);
+  }, [stations, isBackendOnline, showSnackbar]);
 
-  // ─── Station ─────────────────────────────────────────────
-  const updateStation = useCallback((id: string, data: Partial<Station>) => {
-    setStations(prev => prev.map(s => s.id === id ? { ...s, ...data } : s));
-  }, []);
+  // ─── Battery with Optimistic UI & Automatic Rollback ──────
+  const addBattery = useCallback(async (battery: Omit<Battery, 'lastUpdated'>) => {
+    const newBattery = { ...battery, lastUpdated: new Date().toISOString() };
+    const prevBatteries = batteries;
+    setBatteries(prev => [...prev, newBattery]);
 
-  // ─── Battery ─────────────────────────────────────────────
-  const addBattery = useCallback((battery: Omit<Battery, 'lastUpdated'>) => {
-    setBatteries(prev => [...prev, { ...battery, lastUpdated: new Date().toISOString() }]);
-    showSnackbar(`Battery ${battery.id} added successfully`);
-  }, [showSnackbar]);
+    if (isBackendOnline) {
+      try {
+        await api.createBattery(newBattery);
+        showSnackbar(`Battery ${battery.id} added to inventory`, 'success');
+      } catch (e: any) {
+        setBatteries(prevBatteries);
+        showSnackbar(`Failed to add battery to server: ${e.message}. Rolled back.`, 'error');
+      }
+    } else {
+      showSnackbar(`Battery ${battery.id} added locally (offline mode)`);
+    }
+  }, [batteries, isBackendOnline, showSnackbar]);
 
-  const updateBattery = useCallback((id: string, data: Partial<Battery>) => {
+  const updateBattery = useCallback(async (id: string, data: Partial<Battery>) => {
+    const prevBatteries = batteries;
     setBatteries(prev => prev.map(b => b.id === id ? { ...b, ...data } : b));
-  }, []);
+
+    if (isBackendOnline) {
+      try {
+        await api.updateBattery(id, data);
+        showSnackbar(`Battery ${id} updated successfully`, 'success');
+      } catch (e: any) {
+        setBatteries(prevBatteries);
+        showSnackbar(`Failed to update battery: ${e.message}. Rolled back.`, 'error');
+      }
+    }
+  }, [batteries, isBackendOnline, showSnackbar]);
 
   // ─── Charging Queue (FIFO - Abhishek Ghansala DSA) ───────
   const processNextCharging = useCallback(async () => {
+    if (isBackendOnline) {
+      try {
+        const dsaRes = await api.dequeueCharging();
+        const availableStation = stations.find(s => s.status === 'available');
+        if (availableStation && dsaRes && dsaRes.evId) {
+          await api.requestCharging(dsaRes.evId);
+        }
+        await refreshBackendData();
+        showSnackbar(`Dispatched vehicle ${dsaRes?.evId || 'from queue'} to bay`, 'success');
+        return dsaRes;
+      } catch (e: any) {
+        showSnackbar(e.message || 'Failed to process charging queue', 'error');
+        return null;
+      }
+    }
+
     if (chargingQueue.length === 0) return null;
     const [first, ...rest] = chargingQueue;
     setChargingQueue(rest);
 
-    // Call manual C++ ChargingQueue dequeue endpoint if backend online
-    if (isBackendOnline) {
-      try {
-        const dsaRes = await api.dequeueCharging();
-        if (dsaRes) {
-          setChargingQueueMeta(prev => ({
-            ...prev,
-            frontIndex: dsaRes.frontIndex ?? prev.frontIndex,
-            rearIndex: dsaRes.rearIndex ?? prev.rearIndex,
-            size: dsaRes.remainingSize ?? Math.max(0, prev.size - 1),
-          }));
-        }
-      } catch (e) {
-        console.error('DSA Dequeue sync failed:', e);
-      }
-    }
-
-    // Create a new session for the processed request
+    // Fallback mode
     const availableStation = stations.find(s => s.status === 'available');
     if (availableStation) {
       const sessionId = nextId('SES');
@@ -330,8 +494,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         startTime: new Date().toISOString(),
         endTime: null,
         batteryStart: first.currentCharge,
-        batteryEnd: null,
-        targetCharge: 80,
+        batteryEnd: first.currentCharge,
+        targetCharge: 85,
         estimatedCost: Math.round(Math.random() * 150 + 50),
         status: 'active',
       };
@@ -349,7 +513,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       showSnackbar(`${first.evId} dequeued (no station currently available)`, 'warning');
     }
     return first;
-  }, [chargingQueue, stations, isBackendOnline, showSnackbar]);
+  }, [chargingQueue, stations, isBackendOnline, refreshBackendData, showSnackbar]);
 
   const removeChargingRequest = useCallback((id: string) => {
     setChargingQueue(prev => prev.filter(r => r.id !== id));
@@ -357,86 +521,118 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [showSnackbar]);
 
   const addChargingRequest = useCallback(async (req: Omit<ChargingRequest, 'id' | 'requestedAt'>) => {
+    if (isBackendOnline) {
+      try {
+        const res = await api.requestCharging(req.evId, 85.0);
+        if (res && res.success) {
+          if (res.assigned && res.stationId) {
+            showSnackbar(`Vehicle ${req.evId} assigned to Station ${res.stationId}`, 'success');
+          } else if (res.queued) {
+            showSnackbar(`All stations busy. Added vehicle ${req.evId} to FIFO Charging Queue (REAR)`, 'info');
+          } else {
+            showSnackbar(res.message || `Charging request processed for ${req.evId}`, 'success');
+          }
+          await refreshBackendData();
+          return;
+        } else {
+          showSnackbar(res?.message || 'Failed to submit charging request', 'error');
+          return;
+        }
+      } catch (e: any) {
+        showSnackbar(e.message || 'Failed to request charging from backend', 'error');
+        return;
+      }
+    }
+
+    // Fallback mode (mock)
     const newReq: ChargingRequest = {
       ...req,
       id: nextId('CQ'),
       requestedAt: new Date().toISOString(),
     };
-    setChargingQueue(prev => [...prev, newReq]);
-    showSnackbar(`${req.evId} added to Charging Queue (REAR)`);
-
-    // Call manual C++ ChargingQueue enqueue endpoint if backend online
-    if (isBackendOnline) {
-      try {
-        const dsaRes = await api.enqueueCharging(req.evId);
-        if (dsaRes && dsaRes.success) {
-          setChargingQueueMeta(prev => ({
-            ...prev,
-            frontIndex: dsaRes.frontIndex ?? prev.frontIndex,
-            rearIndex: dsaRes.rearIndex ?? prev.rearIndex,
-            size: dsaRes.size ?? (prev.size + 1),
-          }));
-        }
-      } catch (e) {
-        console.error('DSA Enqueue sync failed:', e);
-      }
+    const freeStation = stations.find(s => s.status === 'available');
+    if (freeStation) {
+      const sessionId = nextId('SES');
+      const newSession: ChargingSession = {
+        id: sessionId,
+        evId: req.evId,
+        evModel: req.evModel,
+        stationId: freeStation.id,
+        startTime: new Date().toISOString(),
+        endTime: null,
+        batteryStart: req.currentCharge,
+        batteryEnd: req.currentCharge,
+        targetCharge: 85,
+        estimatedCost: Math.round(req.currentCharge * 8.5),
+        status: 'active',
+      };
+      setSessions(prev => [...prev, newSession]);
+      setStations(prev => prev.map(s =>
+        s.id === freeStation.id
+          ? { ...s, status: 'charging' as const, currentEV: req.evId, sessionStart: new Date().toISOString() }
+          : s
+      ));
+      setEVs(prev => prev.map(ev =>
+        ev.id === req.evId ? { ...ev, status: 'charging' as const } : ev
+      ));
+      showSnackbar(`Assigned ${req.evId} to ${freeStation.name}`, 'success');
+    } else {
+      setChargingQueue(prev => [...prev, newReq]);
+      setEVs(prev => prev.map(ev =>
+        ev.id === req.evId ? { ...ev, status: 'waiting' as const } : ev
+      ));
+      showSnackbar(`${req.evId} added to Charging Queue (REAR)`, 'info');
     }
-  }, [isBackendOnline, showSnackbar]);
+  }, [isBackendOnline, stations, refreshBackendData, showSnackbar]);
 
   // ─── Swap Queue (FIFO - Abhishek Ghansala DSA) ───────────
   const processNextSwap = useCallback(async () => {
+    if (isBackendOnline) {
+      try {
+        const res = await api.processSwap();
+        if (res && res.success) {
+          showSnackbar(res.message || `Battery swap completed for ${res.evId}`, 'success');
+          await refreshBackendData();
+          return res;
+        } else {
+          showSnackbar(res?.message || 'Inventory exhausted. Cannot process swap.', 'error');
+          return null;
+        }
+      } catch (err: any) {
+        showSnackbar(err.message || 'Swap processing failed', 'error');
+        return null;
+      }
+    }
+
     if (swapQueue.length === 0) return null;
     const [first, ...rest] = swapQueue;
     setSwapQueue(rest);
 
-    // Call manual C++ SwapQueue dequeue endpoint
-    if (isBackendOnline) {
-      try {
-        const dsaRes = await api.dequeueSwap();
-        if (dsaRes) {
-          setSwapQueueMeta(prev => ({
-            ...prev,
-            frontIndex: dsaRes.frontIndex ?? prev.frontIndex,
-            rearIndex: dsaRes.rearIndex ?? prev.rearIndex,
-            size: dsaRes.remainingSize ?? Math.max(0, prev.size - 1),
-          }));
-        }
-      } catch (e) {
-        console.error('Swap Queue sync failed:', e);
-      }
-    }
+    const availableBat = batteries.find(b => b.status === 'available');
+    const batId = availableBat ? availableBat.id : 'BAT-01';
 
     const txnId = nextId('TXN');
+    const swapAmount = 300 + (first.requiredCapacity * 5);
     const txn: Transaction = {
       id: txnId,
       evId: first.evId,
       type: 'battery-swap',
-      stationOrBattery: 'BAT-SWAP',
+      stationOrBattery: batId,
       date: new Date().toISOString(),
-      amount: Math.round(Math.random() * 60 + 40),
+      amount: swapAmount,
       energyDelivered: first.requiredCapacity * 0.8,
-      duration: Math.round(Math.random() * 8 + 5),
+      duration: 5,
       status: 'completed',
     };
     setTransactions(prev => [txn, ...prev]);
-
-    // Push completed transaction to C++ LIFO Stack
-    if (isBackendOnline) {
-      try {
-        await api.pushTransactionStack(txnId);
-        setTransactionStackMeta(prev => ({
-          ...prev,
-          topIndex: prev.topIndex + 1,
-          size: prev.size + 1,
-        }));
-      } catch (e) {
-        console.error('Stack push sync failed:', e);
-      }
+    setEVs(prev => prev.map(ev => ev.id === first.evId ? { ...ev, currentCharge: 100, status: 'available' } : ev));
+    if (availableBat) {
+      setBatteries(prev => prev.map(b => b.id === availableBat.id ? { ...b, status: 'inuse', currentVehicle: first.evId } : b));
     }
 
     showSnackbar(`Battery swap completed for ${first.evId}`);
     return first;
-  }, [swapQueue, isBackendOnline, showSnackbar]);
+  }, [isBackendOnline, swapQueue, batteries, refreshBackendData, showSnackbar]);
 
   const removeSwapRequest = useCallback((id: string) => {
     setSwapQueue(prev => prev.filter(r => r.id !== id));
@@ -444,6 +640,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [showSnackbar]);
 
   const addSwapRequest = useCallback(async (req: Omit<SwapRequest, 'id' | 'requestedAt'>) => {
+    if (isBackendOnline) {
+      try {
+        const res = await api.requestSwap(req.evId, req.currentBattery, req.requiredCapacity);
+        if (res && res.success) {
+          if (res.swapped) {
+            showSnackbar(res.message || `Swap complete! Assigned battery ${res.batteryId} to ${req.evId}`, 'success');
+          } else if (res.queued) {
+            showSnackbar(res.message || `No ready batteries. Added ${req.evId} to FIFO Swap Queue (REAR)`, 'info');
+          }
+          await refreshBackendData();
+          return;
+        } else {
+          showSnackbar(res?.message || 'Failed to submit swap request', 'error');
+          return;
+        }
+      } catch (e: any) {
+        showSnackbar(e.message || 'Swap request failed', 'error');
+        return;
+      }
+    }
+
+    // Fallback mode if backend offline
     const newReq: SwapRequest = {
       ...req,
       id: nextId('SQ'),
@@ -451,48 +669,43 @@ export function AppProvider({ children }: { children: ReactNode }) {
     };
     setSwapQueue(prev => [...prev, newReq]);
     showSnackbar(`${req.evId} added to Swap Queue (REAR)`);
-
-    // Call manual C++ SwapQueue enqueue
-    if (isBackendOnline) {
-      try {
-        const dsaRes = await api.enqueueSwap(req.evId);
-        if (dsaRes && dsaRes.success) {
-          setSwapQueueMeta(prev => ({
-            ...prev,
-            frontIndex: dsaRes.frontIndex ?? prev.frontIndex,
-            rearIndex: dsaRes.rearIndex ?? prev.rearIndex,
-            size: dsaRes.size ?? (prev.size + 1),
-          }));
-        }
-      } catch (e) {
-        console.error('Swap queue enqueue sync failed:', e);
-      }
-    }
-  }, [isBackendOnline, showSnackbar]);
+  }, [isBackendOnline, refreshBackendData, showSnackbar]);
 
   // ─── Sessions & Transactions (LIFO Stack - Abhishek DSA) ──
   const completeSession = useCallback(async (sessionId: string) => {
     const session = sessions.find(s => s.id === sessionId);
     if (!session) return null;
 
-    // Remove from active sessions
-    setSessions(prev => prev.filter(s => s.id !== sessionId));
+    if (isBackendOnline) {
+      try {
+        const res = await api.completeCharging(session.stationId);
+        if (res && res.success) {
+          showSnackbar(res.message || `Charging session for ${session.evId} completed — ₹${res.amount?.toFixed(2)}`, 'success');
+          await refreshBackendData();
+          return res;
+        } else {
+          showSnackbar(res?.message || 'Failed to complete charging session on backend', 'error');
+          return null;
+        }
+      } catch (e: any) {
+        showSnackbar(e.message || 'Failed to complete charging session on backend', 'error');
+        return null;
+      }
+    }
 
-    // Free the station
+    // Fallback mode if backend offline
+    setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, status: 'completed' as const, endTime: new Date().toISOString() } : s));
     setStations(prev => prev.map(s =>
       s.id === session.stationId
         ? { ...s, status: 'available' as const, currentEV: null, sessionStart: null }
         : s
     ));
-
-    // Update EV status
     setEVs(prev => prev.map(ev =>
       ev.id === session.evId
         ? { ...ev, status: 'available' as const, currentCharge: session.targetCharge, lastActivity: new Date().toISOString() }
         : ev
     ));
 
-    // Create transaction
     const txnId = nextId('TXN');
     const txn: Transaction = {
       id: txnId,
@@ -506,26 +719,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       status: 'completed',
     };
     setTransactions(prev => [txn, ...prev]);
-
-    // Push new transaction onto C++ LIFO Stack & SQLite database
-    if (isBackendOnline) {
-      try {
-        await api.completeCharging(session.stationId);
-        await api.createTransaction(txn);
-        await api.pushTransactionStack(txnId);
-        setTransactionStackMeta(prev => ({
-          ...prev,
-          topIndex: prev.topIndex + 1,
-          size: prev.size + 1,
-        }));
-      } catch (e) {
-        console.error('Failed to sync completed session to backend:', e);
-      }
-    }
-
-    showSnackbar(`Charging session for ${session.evId} completed — ₹${session.estimatedCost.toFixed(2)} (Pushed to Stack)`);
+    showSnackbar(`Charging session for ${session.evId} completed — ₹${session.estimatedCost.toFixed(2)}`);
     return txn;
-  }, [sessions, isBackendOnline, showSnackbar]);
+  }, [sessions, isBackendOnline, refreshBackendData, showSnackbar]);
 
   // ─── Notifications ───────────────────────────────────────
   const markNotificationRead = useCallback((id: string) => {

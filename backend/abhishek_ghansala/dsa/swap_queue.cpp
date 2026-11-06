@@ -70,3 +70,19 @@ int SwapQueue::getItems(std::string outArray[], int maxCapacity) const {
     }
     return count;
 }
+
+void SwapQueue::clear() {
+    frontIndex = 0;
+    rearIndex = -1;
+    currentSize = 0;
+}
+
+bool SwapQueue::contains(const std::string& vehicleId) const {
+    for (int i = 0; i < currentSize; i++) {
+        int idx = (frontIndex + i) % SWAP_QUEUE_CAPACITY;
+        if (items[idx] == vehicleId) {
+            return true;
+        }
+    }
+    return false;
+}

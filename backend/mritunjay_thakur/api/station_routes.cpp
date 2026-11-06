@@ -17,6 +17,11 @@ void registerStationRoutes(crow::App<crow::CORSHandler>& app, StationService& st
             res[i]["status"] = list[i].getStatus();
             res[i]["currentEV"] = list[i].getCurrentVehicleId();
             res[i]["location"] = list[i].getLocation();
+            if (list[i].getSessionStart().empty()) {
+                res[i]["sessionStart"] = nullptr;
+            } else {
+                res[i]["sessionStart"] = list[i].getSessionStart();
+            }
         }
 
         return crow::response(200, res);
@@ -35,6 +40,11 @@ void registerStationRoutes(crow::App<crow::CORSHandler>& app, StationService& st
             res["status"] = station.getStatus();
             res["currentEV"] = station.getCurrentVehicleId();
             res["location"] = station.getLocation();
+            if (station.getSessionStart().empty()) {
+                res["sessionStart"] = nullptr;
+            } else {
+                res["sessionStart"] = station.getSessionStart();
+            }
             return crow::response(200, res);
         } else {
             crow::json::wvalue res;

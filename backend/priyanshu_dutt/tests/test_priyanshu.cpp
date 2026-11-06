@@ -59,6 +59,75 @@ int main() {
     assert(service.getEVById("EV-999", retrieved) == false);
     std::cout << "[PASS] EV deletion passed.\n";
 
-    std::cout << "\n>>> ALL TESTS PASSED FOR PRIYANSHU DUTT! <<<\n";
+    // 4. Test EVService with real SQLite Database
+    std::cout << "\n--- Testing Real SQLite Persistence for Priyanshu Dutt ---\n";
+    std::string dbFile = "test_priyanshu.db";
+    // Remove stale test db if present
+    std::remove(dbFile.c_str());
+
+    Database db(dbFile);
+    assert(db.open());
+
+    bool schemaLoaded = db.initSchema("../database/schema.sql") ||
+                        db.initSchema("backend/database/schema.sql") ||
+                        db.initSchema("database/schema.sql");
+    assert(schemaLoaded && "Failed to load database schema!");
+    std::cout << "[PASS] Database connected and schema.sql initialized successfully.\n";
+
+    EVService dbService(&db);
+    EV dbList[MAX_EVS];
+    int seedCount = dbService.getAllEVs(dbList, MAX_EVS);
+    assert(seedCount >= 6); // Schema seed has EV-101 through EV-106, EV-125
+    std::cout << "[PASS] Seeded EVs retrieved from SQLite (count = " << seedCount << ").\n";
+
+    // Insert new EV into SQLite
+    EV realEV("EV-DB-TEST", "Suresh Kumar", "Hyundai Kona Electric", 39.2, 55.0, "available");
+    assert(dbService.createEV(realEV, err));
+    std::cout << "[PASS] Real EV successfully created in SQLite database.\n";
+
+    // Query back from SQLite
+    EV queriedEV;
+    assert(dbService.getEVById("EV-DB-TEST", queriedEV));
+    assert(queriedEV.getOwnerName() == "Suresh Kumar");
+    assert(queriedEV.getModel() == "Hyundai Kona Electric");
+    assert(queriedEV.getBatteryCapacity() == 39.2);
+    assert(queriedEV.getCurrentCharge() == 55.0);
+    assert(queriedEV.getStatus() == "available");
+    std::cout << "[PASS] EV retrieved from SQLite by ID with all matching attributes.\n";
+
+    // Update in SQLite
+    queriedEV.setCurrentCharge(88.0);
+    queriedEV.setStatus("charging");
+    assert(dbService.updateEV("EV-DB-TEST", queriedEV, err));
+
+    EV verifiedEV;
+    assert(dbService.getEVById("EV-DB-TEST", verifiedEV));
+    assert(verifiedEV.getCurrentCharge() == 88.0);
+    assert(verifiedEV.getStatus() == "charging");
+    std::cout << "[PASS] EV updated in SQLite database.\n";
+
+    // 5. Test Persistence Across Connection Restart
+    std::cout << "\n--- Testing Persistence across Connection Close / Reopen ---\n";
+    db.close();
+
+    Database reopenedDb(dbFile);
+    assert(reopenedDb.open());
+    EVService reopenedService(&reopenedDb);
+
+    EV persistedEV;
+    assert(reopenedService.getEVById("EV-DB-TEST", persistedEV));
+    assert(persistedEV.getCurrentCharge() == 88.0);
+    assert(persistedEV.getStatus() == "charging");
+    std::cout << "[PASS] PERSISTENCE VERIFIED: Updated EV survived connection restart!\n";
+
+    // Clean up test EV
+    assert(reopenedService.deleteEV("EV-DB-TEST"));
+    EV notFoundEV;
+    assert(!reopenedService.getEVById("EV-DB-TEST", notFoundEV));
+    std::cout << "[PASS] Test EV cleaned up from SQLite.\n";
+    reopenedDb.close();
+    std::remove(dbFile.c_str());
+
+    std::cout << "\n>>> ALL IN-MEMORY AND REAL SQLITE TESTS PASSED FOR PRIYANSHU DUTT! <<<\n";
     return 0;
 }
