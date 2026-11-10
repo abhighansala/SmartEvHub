@@ -126,13 +126,14 @@ void registerEVRoutes(crow::App<crow::CORSHandler>& app, EVService& evService) {
     CROW_ROUTE(app, "/api/evs/<string>").methods(crow::HTTPMethod::Delete)
     ([&evService](std::string id){
         crow::json::wvalue res;
-        if (evService.deleteEV(id)) {
+        std::string err;
+        if (evService.deleteEV(id, err)) {
             res["success"] = true;
             res["message"] = "EV deleted successfully";
             return crow::response(200, res);
         } else {
             res["success"] = false;
-            res["message"] = "EV not found with ID: " + id;
+            res["message"] = err.empty() ? ("EV not found with ID: " + id) : err;
             return crow::response(404, res);
         }
     });

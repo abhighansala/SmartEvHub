@@ -52,9 +52,9 @@ interface AppContextType {
   refreshBackendData: () => Promise<void>;
 
   // EV CRUD (Optimistic with Rollback)
-  addEV: (ev: Omit<EV, 'lastActivity' | 'registeredAt'>) => Promise<void>;
-  updateEV: (id: string, data: Partial<EV>) => Promise<void>;
-  deleteEV: (id: string) => Promise<void>;
+  addEV: (ev: Omit<EV, 'lastActivity' | 'registeredAt'>) => Promise<boolean>;
+  updateEV: (id: string, data: Partial<EV>) => Promise<boolean>;
+  deleteEV: (id: string) => Promise<boolean>;
 
   // Station operations (Optimistic with Rollback)
   updateStation: (id: string, data: Partial<Station>) => Promise<void>;
@@ -353,29 +353,36 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [sessions, stations]);
 
   // ─── EV CRUD with Optimistic UI & Automatic Rollback ─────
-  const addEV = useCallback(async (ev: Omit<EV, 'lastActivity' | 'registeredAt'>) => {
+  const addEV = useCallback(async (ev: Omit<EV, 'lastActivity' | 'registeredAt'>): Promise<boolean> => {
     const now = new Date().toISOString();
-    const newEV = { ...ev, lastActivity: now, registeredAt: now };
+    const newEV: EV = { ...ev, lastActivity: now, registeredAt: now };
     const prevEVs = evs;
+
+    if (!isBackendOnline) {
+      if (evs.some(existing => existing.id.toLowerCase() === ev.id.toLowerCase())) {
+        showSnackbar(`EV with ID ${ev.id} already exists.`, 'error');
+        return false;
+      }
+      setEVs(prev => [...prev, newEV]);
+      showSnackbar(`EV ${ev.id} registered successfully (Offline Mode)`, 'info');
+      return true;
+    }
 
     // Optimistic UI update
     setEVs(prev => [...prev, newEV]);
-
-    if (isBackendOnline) {
-      try {
-        await api.createEV(newEV);
-        showSnackbar(`EV ${ev.id} registered in SQLite database`, 'success');
-      } catch (e: any) {
-        // Rollback state on error
-        setEVs(prevEVs);
-        showSnackbar(`Failed to register EV on server: ${e.message}. Rolled back changes.`, 'error');
-      }
-    } else {
-      showSnackbar(`EV ${ev.id} registered locally (offline mode)`, 'info');
+    try {
+      await api.createEV(newEV);
+      showSnackbar(`EV ${ev.id} registered in SQLite database`, 'success');
+      return true;
+    } catch (e: any) {
+      // Rollback state on error
+      setEVs(prevEVs);
+      showSnackbar(e.message || `Failed to register EV on server: ${e.message}. Rolled back changes.`, 'error');
+      return false;
     }
   }, [evs, isBackendOnline, showSnackbar]);
 
-  const updateEV = useCallback(async (id: string, data: Partial<EV>) => {
+  const updateEV = useCallback(async (id: string, data: Partial<EV>): Promise<boolean> => {
     const prevEVs = evs;
     setEVs(prev => prev.map(ev => ev.id === id ? { ...ev, ...data } : ev));
 
@@ -383,29 +390,37 @@ export function AppProvider({ children }: { children: ReactNode }) {
       try {
         await api.updateEV(id, data);
         showSnackbar(`EV ${id} updated successfully`, 'success');
+        return true;
       } catch (e: any) {
         // Rollback state on error
         setEVs(prevEVs);
-        showSnackbar(`Failed to update EV: ${e.message}. Rolled back.`, 'error');
+        showSnackbar(e.message || `Failed to update EV ${id}`, 'error');
+        return false;
       }
+    } else {
+      showSnackbar(`EV ${id} updated (Offline Mode)`, 'info');
+      return true;
     }
   }, [evs, isBackendOnline, showSnackbar]);
 
-  const deleteEV = useCallback(async (id: string) => {
+  const deleteEV = useCallback(async (id: string): Promise<boolean> => {
     const prevEVs = evs;
     setEVs(prev => prev.filter(ev => ev.id !== id));
 
     if (isBackendOnline) {
       try {
         await api.deleteEV(id);
-        showSnackbar(`EV ${id} removed from SQLite registry`, 'info');
+        showSnackbar(`EV ${id} removed successfully`, 'info');
+        return true;
       } catch (e: any) {
         // Rollback state on error
         setEVs(prevEVs);
-        showSnackbar(`Failed to delete EV: ${e.message}. Rolled back.`, 'error');
+        showSnackbar(e.message || `Failed to delete EV ${id}`, 'error');
+        return false;
       }
     } else {
-      showSnackbar(`EV ${id} removed`, 'info');
+      showSnackbar(`EV ${id} removed (Offline Mode)`, 'info');
+      return true;
     }
   }, [evs, isBackendOnline, showSnackbar]);
 

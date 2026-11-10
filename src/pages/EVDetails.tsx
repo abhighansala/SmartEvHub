@@ -12,8 +12,9 @@ import TableCell from '@mui/material/TableCell';
 import TableContainer from '@mui/material/TableContainer';
 import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
+import CircularProgress from '@mui/material/CircularProgress';
 import { useTheme, alpha } from '@mui/material/styles';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 import ArrowBackOutlined from '@mui/icons-material/ArrowBackOutlined';
 import BatteryChargingFullOutlined from '@mui/icons-material/BatteryChargingFullOutlined';
@@ -22,15 +23,44 @@ import PageHeader from '@/components/common/PageHeader';
 import StatusChip from '@/components/common/StatusChip';
 import EmptyState from '@/components/common/EmptyState';
 import { useApp } from '@/context/AppContext';
+import { api } from '@/services/api';
+import type { EV } from '@/types';
 
 export default function EVDetails() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const theme = useTheme();
-  const { evs, transactions, sessions } = useApp();
+  const { evs, transactions, sessions, isBackendOnline } = useApp();
   const [tab, setTab] = useState(0);
+  const [fetchedEV, setFetchedEV] = useState<EV | null>(null);
+  const [loading, setLoading] = useState(false);
 
-  const ev = evs.find(e => e.id === id);
+  useEffect(() => {
+    const existing = evs.find(e => e.id === id);
+    if (!existing && id && isBackendOnline) {
+      setLoading(true);
+      api.getEVById(id)
+        .then(data => {
+          if (data && data.id) {
+            setFetchedEV(data);
+          }
+        })
+        .catch(() => {
+          // not found
+        })
+        .finally(() => setLoading(false));
+    }
+  }, [id, evs, isBackendOnline]);
+
+  const ev = evs.find(e => e.id === id) || fetchedEV;
+  if (loading) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 300 }}>
+        <CircularProgress />
+      </Box>
+    );
+  }
+
   if (!ev) {
     return (
       <EmptyState
