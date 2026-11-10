@@ -3,6 +3,9 @@
 
 #include "../models/battery.h"
 #include "../../aditya_singh/database/database.h"
+#include "../../agreev_singh/models/transaction.h"
+#include "../../abhishek_ghansala/dsa/swap_queue.h"
+#include "../../abhishek_ghansala/dsa/transaction_stack.h"
 #include <string>
 
 // ============================================================================
@@ -68,14 +71,30 @@ public:
     // -------------------------------------------------------------------------
 
     // Standard swap: allocates ready battery to EV, marks battery as 'inuse'
-    bool performSwap(const std::string& evId, Battery& outGivenBattery);
+    bool performSwap(const std::string& evId, Battery& outGivenBattery, Transaction* outTxn = nullptr);
 
     // Enhanced swap: handles incoming depleted battery, allocates fresh battery
     bool performSwap(const std::string& evId, const std::string& oldBatteryId,
-                     double requiredCapacity, Battery& outGivenBattery);
+                     double requiredCapacity, Battery& outGivenBattery, Transaction* outTxn = nullptr);
 
     // -------------------------------------------------------------------------
-    // 4. Inventory Mutation Operations (Add, Update, Charge)
+    // 4. Swap Queue Management & Recovery Operations
+    // -------------------------------------------------------------------------
+
+    // Rehydrate FIFO Swap Queue deterministically from SQLite (waiting swap EVs ordered by last_activity ASC, registered_at ASC, rowid ASC)
+    int rehydrateSwapQueue(SwapQueue& queue);
+
+    // Enqueue EV when no ready battery is available; updates EV status to 'swapping'
+    bool enqueueWaitingSwap(const std::string& evId, SwapQueue& queue);
+
+    // Process oldest queued request atomically; restores queue if DB fails; pushes to txnStack if commit succeeds
+    bool processNextSwap(SwapQueue& queue, Battery& outGivenBattery, Transaction& outTxn, TransactionStack* txnStack = nullptr);
+
+    // Process oldest queued swap if a ready battery is available
+    bool dispatchNextSwapIfAvailable(SwapQueue& queue, Battery& outGivenBattery, Transaction& outTxn, TransactionStack* txnStack = nullptr);
+
+    // -------------------------------------------------------------------------
+    // 5. Inventory Mutation Operations (Add, Update, Charge)
     // -------------------------------------------------------------------------
 
     // Add a new battery to inventory (updates array and SQLite if open)

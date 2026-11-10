@@ -45,7 +45,7 @@ export default function StationDetails() {
   };
 
   const progress = session
-    ? Math.min(session.batteryStart + (session.targetCharge - session.batteryStart) * 0.6, session.targetCharge)
+    ? (session.batteryEnd ?? session.batteryStart)
     : 0;
 
   return (

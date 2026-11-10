@@ -4,9 +4,14 @@
 #include <crow.h>
 #include <crow/middlewares/cors.h>
 #include "../services/battery_service.h"
+#include "../../abhishek_ghansala/dsa/swap_queue.h"
+#include "../../abhishek_ghansala/dsa/transaction_stack.h"
 
 // Registers Battery Swap workflow routes
 // Created by: Amit Singh Kaintura (Battery & Swap Module Owner, ID: 2518188)
-void registerSwapRoutes(crow::App<crow::CORSHandler>& app, BatteryService& batteryService);
+void registerSwapRoutes(crow::App<crow::CORSHandler>& app,
+                        BatteryService& batteryService,
+                        SwapQueue& swapQueue,
+                        TransactionStack* txnStack = nullptr);
 
 #endif

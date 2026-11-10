@@ -17,15 +17,19 @@ int EVService::getAllEVs(EV outList[], int maxCapacity) {
 
         if (sqlite3_prepare_v2(handle, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
             while (sqlite3_step(stmt) == SQLITE_ROW && count < maxCapacity) {
-                std::string id = (const char*)sqlite3_column_text(stmt, 0);
-                std::string owner = (const char*)sqlite3_column_text(stmt, 1);
-                std::string model = (const char*)sqlite3_column_text(stmt, 2);
+                const char* idText = (const char*)sqlite3_column_text(stmt, 0);
+                const char* ownerText = (const char*)sqlite3_column_text(stmt, 1);
+                const char* modelText = (const char*)sqlite3_column_text(stmt, 2);
                 double cap = sqlite3_column_double(stmt, 3);
                 double charge = sqlite3_column_double(stmt, 4);
-                std::string status = (const char*)sqlite3_column_text(stmt, 5);
+                const char* statusText = (const char*)sqlite3_column_text(stmt, 5);
 
                 const char* actText = (const char*)sqlite3_column_text(stmt, 6);
                 const char* regText = (const char*)sqlite3_column_text(stmt, 7);
+                std::string id = idText ? idText : "";
+                std::string owner = ownerText ? ownerText : "";
+                std::string model = modelText ? modelText : "";
+                std::string status = statusText ? statusText : "available";
                 std::string lastAct = actText ? actText : "";
                 std::string regAt = regText ? regText : "";
 
@@ -56,15 +60,21 @@ bool EVService::getEVById(const std::string& id, EV& outEV) {
         if (sqlite3_prepare_v2(handle, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
             sqlite3_bind_text(stmt, 1, id.c_str(), -1, SQLITE_STATIC);
             if (sqlite3_step(stmt) == SQLITE_ROW) {
-                outEV.setId((const char*)sqlite3_column_text(stmt, 0));
-                outEV.setOwnerName((const char*)sqlite3_column_text(stmt, 1));
-                outEV.setModel((const char*)sqlite3_column_text(stmt, 2));
-                outEV.setBatteryCapacity(sqlite3_column_double(stmt, 3));
-                outEV.setCurrentCharge(sqlite3_column_double(stmt, 4));
-                outEV.setStatus((const char*)sqlite3_column_text(stmt, 5));
-
+                const char* idText = (const char*)sqlite3_column_text(stmt, 0);
+                const char* ownerText = (const char*)sqlite3_column_text(stmt, 1);
+                const char* modelText = (const char*)sqlite3_column_text(stmt, 2);
+                double cap = sqlite3_column_double(stmt, 3);
+                double charge = sqlite3_column_double(stmt, 4);
+                const char* statusText = (const char*)sqlite3_column_text(stmt, 5);
                 const char* actText = (const char*)sqlite3_column_text(stmt, 6);
                 const char* regText = (const char*)sqlite3_column_text(stmt, 7);
+
+                outEV.setId(idText ? idText : "");
+                outEV.setOwnerName(ownerText ? ownerText : "");
+                outEV.setModel(modelText ? modelText : "");
+                outEV.setBatteryCapacity(cap);
+                outEV.setCurrentCharge(charge);
+                outEV.setStatus(statusText ? statusText : "available");
                 outEV.setLastActivity(actText ? actText : "");
                 outEV.setRegisteredAt(regText ? regText : "");
 
@@ -116,6 +126,10 @@ bool EVService::createEV(const EV& ev, std::string& outError) {
             int rc = sqlite3_step(stmt);
             sqlite3_finalize(stmt);
             if (rc == SQLITE_DONE) {
+                if (evCount < MAX_EVS) {
+                    evArray[evCount] = ev;
+                    evCount++;
+                }
                 return true;
             } else {
                 outError = std::string("Database error: ") + sqlite3_errmsg(handle);
@@ -168,6 +182,12 @@ bool EVService::updateEV(const std::string& id, const EV& updatedEV, std::string
 
             int changes = sqlite3_changes(handle);
             if (changes > 0) {
+                for (int i = 0; i < evCount; i++) {
+                    if (evArray[i].getId() == id) {
+                        evArray[i] = updatedEV;
+                        break;
+                    }
+                }
                 return true;
             }
             // If 0 rows were affected in database, check fallback array below or report not found
@@ -190,6 +210,7 @@ bool EVService::updateEV(const std::string& id, const EV& updatedEV, std::string
 }
 
 bool EVService::deleteEV(const std::string& id, std::string& outError) {
+    bool dbDeleted = false;
     // Delete from database if connected
     if (db != nullptr && db->isOpen()) {
         sqlite3* handle = db->getDbHandle();
@@ -208,7 +229,7 @@ bool EVService::deleteEV(const std::string& id, std::string& outError) {
 
             int changes = sqlite3_changes(handle);
             if (changes > 0) {
-                return true;
+                dbDeleted = true;
             }
             // If 0 rows were affected in database, check fallback array below or report not found
         } else {
@@ -226,6 +247,10 @@ bool EVService::deleteEV(const std::string& id, std::string& outError) {
             evCount--;
             return true;
         }
+    }
+
+    if (dbDeleted) {
+        return true;
     }
 
     outError = "EV not found with ID: " + id;

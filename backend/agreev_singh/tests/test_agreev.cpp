@@ -160,8 +160,76 @@ int main() {
     std::cout << "\n>>> [DEMO] Formatted Receipt Output:\n";
     txn1.displayReceipt();
 
+    // ------------------------------------------------------------------------
+    // TEST SECTION 5: Real SQLite Persistence & Foreign-Key Enforcement
+    // ------------------------------------------------------------------------
+    std::cout << "\n>>> [TEST 5] Testing Real SQLite Persistence & Foreign Keys...\n";
+    std::string dbFile = "test_agreev.db";
+    std::remove(dbFile.c_str());
+
+    Database db(dbFile);
+    assert(db.open());
+
+    bool schemaLoaded = db.initSchema("../database/schema.sql") ||
+                        db.initSchema("backend/database/schema.sql") ||
+                        db.initSchema("database/schema.sql");
+    assert(schemaLoaded && "Failed to load database schema for TransactionService!");
+    std::cout << "  ✓ Database connected and schema initialized.\n";
+
+    TransactionService dbService(&db);
+    Transaction dbTxns[MAX_TRANSACTIONS];
+    int seedCount = dbService.getAllTransactions(dbTxns, MAX_TRANSACTIONS);
+    assert(seedCount == 3); // Seed has TXN-5001, TXN-5002, TXN-5003
+    std::cout << "  ✓ Loaded " << seedCount << " seed transactions from SQLite.\n";
+
+    // Verify revenue calculation directly from SQLite
+    double dbRevenue = dbService.getTotalRevenue();
+    assert(std::abs(dbRevenue - 2000.0) < 0.001); // 870 + 450 + 680 = 2000
+    std::cout << "  ✓ Real SQLite revenue computed: INR " << dbRevenue << "\n";
+
+    // Add new transaction into SQLite (EV-101 exists in EV table)
+    Transaction realTxn("TXN-5004", "EV-101", "charging", "CS-1",
+                        "Standard fast charge", 520.0, 28.0, 45,
+                        "2026-10-15 09:15:00", "completed");
+    assert(dbService.addTransaction(realTxn));
+    assert(dbService.getTotalSessions() == 4);
+    assert(std::abs(dbService.getTotalRevenue() - 2520.0) < 0.001);
+    std::cout << "  ✓ Transaction added to SQLite, new total revenue: INR 2520\n";
+
+    // ------------------------------------------------------------------------
+    // TEST SECTION 6: Foreign Key Constraint Enforcement
+    // ------------------------------------------------------------------------
+    std::cout << "\n>>> [TEST 6] Testing Foreign Key Enforcement (PRAGMA foreign_keys = ON)...\n";
+    // Attempting to insert a transaction referencing a non-existent EV must fail FK check
+    Transaction badFkTxn("TXN-BAD-FK", "EV-GHOST-999", "charging", "CS-1",
+                         "Invalid vehicle reference", 100.0, 10.0, 15,
+                         "2026-10-15 12:00:00", "completed");
+    bool badFkResult = dbService.addTransaction(badFkTxn);
+    assert(badFkResult == false);
+    std::cout << "  ✓ FOREIGN KEY ENFORCEMENT VERIFIED: Non-existent vehicle was rejected by SQLite.\n";
+
+    // ------------------------------------------------------------------------
+    // TEST SECTION 7: Persistence across Connection Close / Reopen
+    // ------------------------------------------------------------------------
+    std::cout << "\n>>> [TEST 7] Testing Persistence across Connection Close / Reopen...\n";
+    db.close();
+
+    Database reopenedDb(dbFile);
+    assert(reopenedDb.open());
+    TransactionService reopenedService(&reopenedDb);
+
+    Transaction persistedTxn;
+    assert(reopenedService.getTransactionById("TXN-5004", persistedTxn));
+    assert(persistedTxn.getVehicleId() == "EV-101");
+    assert(persistedTxn.getAmount() == 520.0);
+    assert(reopenedService.getTotalSessions() == 4);
+    std::cout << "  ✓ PERSISTENCE VERIFIED: 4 transactions survived connection restart!\n";
+
+    reopenedDb.close();
+    std::remove(dbFile.c_str());
+
     std::cout << "\n========================================================\n";
-    std::cout << " >>> ALL TESTS PASSED FOR AGREEV SINGH (ROLE 6)! <<<\n";
+    std::cout << " >>> ALL 7 TEST SUITES PASSED FOR AGREEV SINGH (ROLE 6)! <<<\n";
     std::cout << "========================================================\n";
     return 0;
 }

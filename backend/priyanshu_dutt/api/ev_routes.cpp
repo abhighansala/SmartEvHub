@@ -123,7 +123,7 @@ void registerEVRoutes(crow::App<crow::CORSHandler>& app, EVService& evService) {
     });
 
     // DELETE /api/evs/<string> - Delete EV
-    CROW_ROUTE(app, "/api/evs/<string>").methods(crow::HTTPMethod::DELETE)
+    CROW_ROUTE(app, "/api/evs/<string>").methods(crow::HTTPMethod::Delete)
     ([&evService](std::string id){
         crow::json::wvalue res;
         std::string err;

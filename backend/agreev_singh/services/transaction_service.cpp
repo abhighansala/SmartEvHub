@@ -64,11 +64,7 @@ int TransactionService::getAllTransactions(Transaction outList[], int maxCapacit
                 count++;
             }
             sqlite3_finalize(stmt);
-
-            // If database returned transactions, return that count
-            if (count > 0) {
-                return count;
-            }
+            return count;
         }
     }
 
@@ -129,18 +125,33 @@ bool TransactionService::addTransaction(const Transaction& txn) {
             sqlite3_finalize(stmt);
             if (rc == SQLITE_DONE) {
                 dbSuccess = true;
+            } else {
+                std::cerr << "[TransactionService Error] SQLite insert failed: "
+                          << sqlite3_errmsg(handle) << " (code: " << rc << ")\n";
             }
         }
     }
 
-    // 2. Keep in-memory fixed array synchronized
+    // When DB is active, success is dictated by real database persistence
+    if (db != nullptr && db->isOpen()) {
+        if (!dbSuccess) {
+            return false;
+        }
+        if (transactionCount < MAX_TRANSACTIONS) {
+            transactionArray[transactionCount] = txn;
+            transactionCount++;
+        }
+        return true;
+    }
+
+    // Fallback mode when DB is not connected
     if (transactionCount < MAX_TRANSACTIONS) {
         transactionArray[transactionCount] = txn;
         transactionCount++;
         return true;
     }
 
-    return dbSuccess;
+    return false;
 }
 
 int TransactionService::getTransactionsByType(const std::string& type, Transaction outList[], int maxCapacity) {

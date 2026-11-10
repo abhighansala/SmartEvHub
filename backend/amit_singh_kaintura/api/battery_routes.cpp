@@ -9,7 +9,10 @@
 // Communicates between C++ backend and React frontend via JSON.
 // ============================================================================
 
-void registerBatteryRoutes(crow::App<crow::CORSHandler>& app, BatteryService& batteryService) {
+void registerBatteryRoutes(crow::App<crow::CORSHandler>& app,
+                           BatteryService& batteryService,
+                           SwapQueue* swapQueue,
+                           TransactionStack* txnStack) {
 
     // -------------------------------------------------------------------------
     // 1. GET /api/batteries - List all replacement batteries in inventory
@@ -62,7 +65,7 @@ void registerBatteryRoutes(crow::App<crow::CORSHandler>& app, BatteryService& ba
     // 3. POST /api/batteries - Add new battery into inventory (from React UI)
     // -------------------------------------------------------------------------
     CROW_ROUTE(app, "/api/batteries").methods(crow::HTTPMethod::POST)
-    ([&batteryService](const crow::request& req) {
+    ([&batteryService, swapQueue, txnStack](const crow::request& req) {
         crow::json::wvalue res;
         auto body = crow::json::load(req.body);
         if (!body) {
@@ -88,6 +91,13 @@ void registerBatteryRoutes(crow::App<crow::CORSHandler>& app, BatteryService& ba
         Battery newBattery(id, capacity, currentCharge, status, health, cycleCount, vehicle);
 
         if (batteryService.addBattery(newBattery)) {
+            // Process oldest queued request if new battery is ready and vehicles are waiting in swap queue
+            if (newBattery.isReady() && swapQueue != nullptr && !swapQueue->isEmpty()) {
+                Battery outBat;
+                Transaction outTxn;
+                batteryService.dispatchNextSwapIfAvailable(*swapQueue, outBat, outTxn, txnStack);
+            }
+
             res["success"] = true;
             res["message"] = "Battery registered successfully: " + id;
             res["id"] = id;
@@ -103,7 +113,7 @@ void registerBatteryRoutes(crow::App<crow::CORSHandler>& app, BatteryService& ba
     // 4. PUT /api/batteries/<id> - Update existing battery attributes
     // -------------------------------------------------------------------------
     CROW_ROUTE(app, "/api/batteries/<string>").methods(crow::HTTPMethod::PUT)
-    ([&batteryService](const crow::request& req, std::string id) {
+    ([&batteryService, swapQueue, txnStack](const crow::request& req, std::string id) {
         crow::json::wvalue res;
         auto body = crow::json::load(req.body);
         if (!body) {
@@ -127,6 +137,13 @@ void registerBatteryRoutes(crow::App<crow::CORSHandler>& app, BatteryService& ba
         if (body.has("currentVehicle")) existing.setCurrentVehicle(std::string(body["currentVehicle"].s()));
 
         batteryService.updateBattery(existing);
+
+        // Process oldest queued request if battery transitioned to ready and vehicles are waiting in swap queue
+        if (existing.isReady() && swapQueue != nullptr && !swapQueue->isEmpty()) {
+            Battery outBat;
+            Transaction outTxn;
+            batteryService.dispatchNextSwapIfAvailable(*swapQueue, outBat, outTxn, txnStack);
+        }
 
         res["success"] = true;
         res["message"] = "Battery updated successfully: " + id;

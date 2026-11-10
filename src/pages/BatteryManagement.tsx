@@ -44,7 +44,7 @@ export default function BatteryManagement() {
 
   const handleAdd = () => {
     addBattery({
-      id: form.id || `BAT${String(batteries.length + 1).padStart(3, '0')}`,
+      id: form.id.trim() || `BAT-${String(batteries.length + 1).padStart(2, '0')}`,
       capacity: Number(form.capacity) || 40.5,
       currentCharge: Number(form.currentCharge) || 100,
       status: form.status,

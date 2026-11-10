@@ -21,8 +21,8 @@ bool ChargingQueue::enqueue(const std::string& vehicleId) {
     items[rearIndex] = vehicleId;
     currentSize++;
 
-    std::cout << "[ChargingQueue] Enqueued: " << vehicleId 
-              << " | FRONT=" << frontIndex << " REAR=" << rearIndex 
+    std::cout << "[ChargingQueue] Enqueued: " << vehicleId
+              << " | FRONT=" << frontIndex << " REAR=" << rearIndex
               << " SIZE=" << currentSize << "\n";
     return true;
 }
@@ -37,7 +37,7 @@ std::string ChargingQueue::dequeue() {
     frontIndex = (frontIndex + 1) % CHARGING_QUEUE_CAPACITY;
     currentSize--;
 
-    std::cout << "[ChargingQueue] Dequeued: " << removedItem 
+    std::cout << "[ChargingQueue] Dequeued: " << removedItem
               << " | Remaining size: " << currentSize << "\n";
     return removedItem;
 }
@@ -79,4 +79,20 @@ int ChargingQueue::getItems(std::string outArray[], int maxCapacity) const {
         count++;
     }
     return count;
+}
+
+void ChargingQueue::clear() {
+    frontIndex = 0;
+    rearIndex = -1;
+    currentSize = 0;
+}
+
+bool ChargingQueue::contains(const std::string& vehicleId) const {
+    for (int i = 0; i < currentSize; i++) {
+        int idx = (frontIndex + i) % CHARGING_QUEUE_CAPACITY;
+        if (items[idx] == vehicleId) {
+            return true;
+        }
+    }
+    return false;
 }

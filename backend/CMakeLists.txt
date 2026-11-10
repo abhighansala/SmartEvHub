@@ -16,6 +16,8 @@ set(COMMON_INCLUDES
     ${CMAKE_SOURCE_DIR}/aditya_singh/database
     ${CMAKE_SOURCE_DIR}/aditya_singh/models
     ${CMAKE_SOURCE_DIR}/aditya_singh/services
+    ${CMAKE_SOURCE_DIR}/aditya_singh/security
+    ${CMAKE_SOURCE_DIR}/aditya_singh/security/include
     ${CMAKE_SOURCE_DIR}/priyanshu_dutt
     ${CMAKE_SOURCE_DIR}/priyanshu_dutt/models
     ${CMAKE_SOURCE_DIR}/priyanshu_dutt/services
@@ -32,21 +34,58 @@ set(COMMON_INCLUDES
     ${CMAKE_SOURCE_DIR}/agreev_singh/services
 )
 
-# Crow and Asio dependency resolution (fallback to bundled headers if system path not found)
-if(EXISTS "/home/abhi/pbl/Crow/include")
-    list(APPEND COMMON_INCLUDES "/home/abhi/pbl/Crow/include")
-else()
+# Common Security Sources (Bcrypt, Blowfish, SHA-256, JWT)
+set(SECURITY_SOURCES
+    aditya_singh/security/bcrypt.cpp
+    aditya_singh/security/blowfish.cpp
+    aditya_singh/security/sha256.cpp
+    aditya_singh/security/jwt_util.cpp
+)
+
+# Crow and Asio dependency resolution
+include(FetchContent)
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/Crow/include" AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/asio/include")
     list(APPEND COMMON_INCLUDES
-        ${CMAKE_CURRENT_SOURCE_DIR}/aditya_runtime/third_party/crow/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/aditya_runtime/third_party/asio/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/Crow/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/asio/include
     )
+elseif(EXISTS "${CMAKE_SOURCE_DIR}/../Crow/include")
+    list(APPEND COMMON_INCLUDES "${CMAKE_SOURCE_DIR}/../Crow/include")
+else()
+    message(STATUS "Fetching standalone Asio headers...")
+    FetchContent_Declare(
+        asio
+        GIT_REPOSITORY https://github.com/chriskohlhoff/asio.git
+        GIT_TAG asio-1-28-0
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_GetProperties(asio)
+    if(NOT asio_POPULATED)
+        FetchContent_Populate(asio)
+        list(APPEND COMMON_INCLUDES ${asio_SOURCE_DIR}/asio/include)
+    endif()
+
+    message(STATUS "Fetching Crow microframework...")
+    FetchContent_Declare(
+        crow
+        GIT_REPOSITORY https://github.com/CrowCpp/Crow.git
+        GIT_TAG v1.2.0
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_GetProperties(crow)
+    if(NOT crow_POPULATED)
+        FetchContent_Populate(crow)
+        list(APPEND COMMON_INCLUDES ${crow_SOURCE_DIR}/include)
+    endif()
 endif()
 
 add_compile_definitions(ASIO_STANDALONE)
 
 # Platform-specific socket and dynamic linking libraries
 if(WIN32)
-    set(PLATFORM_LIBS ws2_32 mswsock)
+    set(PLATFORM_LIBS ws2_32 mswsock bcrypt)
+    add_compile_definitions(_WIN32_WINNT=0x0601)
 else()
     set(PLATFORM_LIBS dl)
 endif()
@@ -57,6 +96,7 @@ endif()
 add_executable(smart_ev_hub_backend
     src/main.cpp
     src/sqlite3.c
+    ${SECURITY_SOURCES}
     # Aditya Singh
     aditya_singh/database/database.cpp
     aditya_singh/services/auth_service.cpp
@@ -90,11 +130,12 @@ target_link_libraries(smart_ev_hub_backend PRIVATE Threads::Threads ${PLATFORM_L
 # 2. Individual Member Standalone Test Targets
 # -----------------------------------------------------------------------------
 
-# Test 1: Aditya Singh (Database + Auth)
+# Test 1: Aditya Singh (Database + Auth + Bcrypt)
 add_executable(test_aditya_singh
     aditya_singh/tests/test_aditya.cpp
     aditya_singh/database/database.cpp
     aditya_singh/services/auth_service.cpp
+    ${SECURITY_SOURCES}
     src/sqlite3.c
 )
 target_include_directories(test_aditya_singh PRIVATE ${COMMON_INCLUDES})
@@ -114,6 +155,7 @@ target_link_libraries(test_priyanshu_dutt PRIVATE Threads::Threads ${PLATFORM_LI
 add_executable(test_mritunjay_thakur
     mritunjay_thakur/tests/test_mritunjay.cpp
     mritunjay_thakur/services/station_service.cpp
+    abhishek_ghansala/dsa/charging_queue.cpp
     aditya_singh/database/database.cpp
     src/sqlite3.c
 )
@@ -124,6 +166,8 @@ target_link_libraries(test_mritunjay_thakur PRIVATE Threads::Threads ${PLATFORM_
 add_executable(test_amit_singh_kaintura
     amit_singh_kaintura/tests/test_amit.cpp
     amit_singh_kaintura/services/battery_service.cpp
+    abhishek_ghansala/dsa/swap_queue.cpp
+    abhishek_ghansala/dsa/transaction_stack.cpp
     aditya_singh/database/database.cpp
     src/sqlite3.c
 )
@@ -149,3 +193,14 @@ add_executable(test_agreev_singh
 )
 target_include_directories(test_agreev_singh PRIVATE ${COMMON_INCLUDES})
 target_link_libraries(test_agreev_singh PRIVATE Threads::Threads ${PLATFORM_LIBS})
+
+# Test 7: Dedicated Security & Auth Test Suite (Bcrypt, JWT, RBAC, Plaintext Migration)
+add_executable(test_security_auth
+    aditya_singh/tests/test_security_auth.cpp
+    aditya_singh/database/database.cpp
+    aditya_singh/services/auth_service.cpp
+    ${SECURITY_SOURCES}
+    src/sqlite3.c
+)
+target_include_directories(test_security_auth PRIVATE ${COMMON_INCLUDES})
+target_link_libraries(test_security_auth PRIVATE Threads::Threads ${PLATFORM_LIBS})
