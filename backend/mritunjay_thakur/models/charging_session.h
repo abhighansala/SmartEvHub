@@ -19,6 +19,9 @@ private:
     double energyConsumed;     // in kWh
     double estimatedCost;      // in INR
     std::string status;        // "active", "completed"
+    int userId;                // ID of owner user
+    std::string requestId;     // Optional associated ChargingRequest ID
+    std::string bayId;         // Bay / Location string
 
 public:
     ChargingSession() {
@@ -34,13 +37,17 @@ public:
         energyConsumed = 0.0;
         estimatedCost = 0.0;
         status = "active";
+        userId = 0;
+        requestId = "";
+        bayId = "";
     }
 
     ChargingSession(std::string sesId, std::string vId, std::string model,
                     std::string sId, double bStart, double target = 100.0,
                     std::string sTime = "", std::string eTime = "",
                     double bEnd = 0.0, double energy = 0.0, double cost = 0.0,
-                    std::string stat = "active") {
+                    std::string stat = "active", int uId = 0,
+                    std::string reqId = "", std::string bId = "") {
         id = sesId;
         vehicleId = vId;
         evModel = model;
@@ -53,6 +60,9 @@ public:
         energyConsumed = energy;
         estimatedCost = cost;
         status = stat;
+        userId = uId;
+        requestId = reqId;
+        bayId = bId;
     }
 
     // Getters
@@ -68,6 +78,9 @@ public:
     double getEnergyConsumed() const { return energyConsumed; }
     double getEstimatedCost() const { return estimatedCost; }
     std::string getStatus() const { return status; }
+    int getUserId() const { return userId; }
+    std::string getRequestId() const { return requestId; }
+    std::string getBayId() const { return bayId; }
 
     // Setters
     void setId(const std::string& newId) { id = newId; }
@@ -82,6 +95,9 @@ public:
     void setEnergyConsumed(double energy) { energyConsumed = energy; }
     void setEstimatedCost(double cost) { estimatedCost = cost; }
     void setStatus(const std::string& newStatus) { status = newStatus; }
+    void setUserId(int uId) { userId = uId; }
+    void setRequestId(const std::string& reqId) { requestId = reqId; }
+    void setBayId(const std::string& bId) { bayId = bId; }
 };
 
 #endif

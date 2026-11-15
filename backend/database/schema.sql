@@ -78,16 +78,36 @@ CREATE TABLE IF NOT EXISTS ChargingSession (
     end_time DATETIME DEFAULT NULL,
     battery_start REAL NOT NULL,
     battery_end REAL DEFAULT NULL,
-    target_charge REAL NOT NULL DEFAULT 100.0,
+    target_charge REAL NOT NULL DEFAULT 80.0,
     energy_consumed REAL DEFAULT 0.0,
     estimated_cost REAL DEFAULT 0.0,
     status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'completed')),
+    user_id INTEGER DEFAULT NULL,
+    request_id TEXT DEFAULT NULL,
+    FOREIGN KEY(user_id) REFERENCES Users(id) ON DELETE SET NULL,
     FOREIGN KEY(vehicle_id) REFERENCES EV(id) ON DELETE CASCADE,
     FOREIGN KEY(station_id) REFERENCES ChargingStation(id) ON DELETE CASCADE
 );
 
 -- ----------------------------------------------------------------------------
--- 6. TransactionLog Table (Completed Operations / Stack History)
+-- 6. ChargingRequest Table (Customer Charging Requests & FIFO Queue Intake)
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS ChargingRequest (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    vehicle_id TEXT NOT NULL,
+    station_id TEXT DEFAULT NULL,
+    bay_id TEXT DEFAULT NULL,
+    target_charge REAL NOT NULL DEFAULT 85.0,
+    status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued', 'allocated', 'active', 'completed', 'cancelled', 'failed')),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(user_id) REFERENCES Users(id) ON DELETE CASCADE,
+    FOREIGN KEY(vehicle_id) REFERENCES EV(id) ON DELETE CASCADE,
+    FOREIGN KEY(station_id) REFERENCES ChargingStation(id) ON DELETE SET NULL
+);
+
+-- ----------------------------------------------------------------------------
+-- 7. TransactionLog Table (Completed Operations / Stack History)
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS TransactionLog (
     id TEXT PRIMARY KEY,
@@ -100,6 +120,9 @@ CREATE TABLE IF NOT EXISTS TransactionLog (
     duration INTEGER DEFAULT 0,
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
     status TEXT NOT NULL DEFAULT 'completed' CHECK(status IN ('completed', 'pending', 'failed')),
+    user_id INTEGER DEFAULT NULL,
+    session_id TEXT DEFAULT NULL,
+    FOREIGN KEY(user_id) REFERENCES Users(id) ON DELETE SET NULL,
     FOREIGN KEY(vehicle_id) REFERENCES EV(id) ON DELETE CASCADE
 );
 
@@ -152,13 +175,19 @@ INSERT OR IGNORE INTO Battery (id, capacity, charge_level, status, health, cycle
 ('BAT-06', 70.0, 88.0, 'inuse', 96.8, 65, 'EV-103', datetime('now', '-2 hours')),
 ('BAT-07', 50.0, 10.0, 'maintenance', 81.0, 240, NULL, datetime('now', '-1 day'));
 
+-- Charging Requests (Customer Intake Seed)
+INSERT OR IGNORE INTO ChargingRequest (id, user_id, vehicle_id, station_id, bay_id, target_charge, status, created_at) VALUES
+('REQ-1001', 9, 'EV-101', 'CS-1', 'Bay A-1', 90.0, 'active', datetime('now', '-25 minutes')),
+('REQ-1002', 10, 'EV-102', 'CS-2', 'Bay A-2', 85.0, 'queued', datetime('now', '-10 minutes')),
+('REQ-1003', 12, 'EV-104', 'CS-1', 'Bay A-1', 80.0, 'queued', datetime('now', '-5 minutes'));
+
 -- Charging Sessions
-INSERT OR IGNORE INTO ChargingSession (id, vehicle_id, ev_model, station_id, start_time, end_time, battery_start, battery_end, target_charge, energy_consumed, estimated_cost, status) VALUES
-('SES-1001', 'EV-101', 'Tata Nexon EV Max', 'CS-1', datetime('now', '-25 minutes'), NULL, 12.0, NULL, 90.0, 14.5, 290.0, 'active'),
-('SES-1000', 'EV-103', 'Hyundai Ioniq 5', 'CS-2', datetime('now', '-90 minutes'), datetime('now', '-30 minutes'), 20.0, 80.0, 80.0, 43.5, 870.0, 'completed');
+INSERT OR IGNORE INTO ChargingSession (id, vehicle_id, ev_model, station_id, start_time, end_time, battery_start, battery_end, target_charge, energy_consumed, estimated_cost, status, user_id, request_id) VALUES
+('SES-1001', 'EV-101', 'Tata Nexon EV Max', 'CS-1', datetime('now', '-25 minutes'), NULL, 12.0, NULL, 90.0, 14.5, 290.0, 'active', 9, 'REQ-1001'),
+('SES-1000', 'EV-103', 'Hyundai Ioniq 5', 'CS-2', datetime('now', '-90 minutes'), datetime('now', '-30 minutes'), 20.0, 80.0, 80.0, 43.5, 870.0, 'completed', 11, NULL);
 
 -- Transactions Log (Seed for Stack)
-INSERT OR IGNORE INTO TransactionLog (id, vehicle_id, type, station_or_battery, description, amount, energy_delivered, duration, timestamp, status) VALUES
-('TXN-5001', 'EV-103', 'charging', 'CS-2', 'Fast charging 20% to 80%', 870.0, 43.5, 60, datetime('now', '-30 minutes'), 'completed'),
-('TXN-5002', 'EV-105', 'battery-swap', 'BAT-03', 'Swapped depleted battery with BAT-03 (100%)', 450.0, 60.0, 5, datetime('now', '-2 hours'), 'completed'),
-('TXN-5003', 'EV-106', 'charging', 'CS-3', 'Ultra-fast charge 40% to 91%', 680.0, 39.4, 35, datetime('now', '-4 hours'), 'completed');
+INSERT OR IGNORE INTO TransactionLog (id, vehicle_id, type, station_or_battery, description, amount, energy_delivered, duration, timestamp, status, user_id, session_id) VALUES
+('TXN-5001', 'EV-103', 'charging', 'CS-2', 'Fast charging 20% to 80%', 870.0, 43.5, 60, datetime('now', '-30 minutes'), 'completed', 11, 'SES-1000'),
+('TXN-5002', 'EV-105', 'battery-swap', 'BAT-03', 'Swapped depleted battery with BAT-03 (100%)', 450.0, 60.0, 5, datetime('now', '-2 hours'), 'completed', 13, NULL),
+('TXN-5003', 'EV-106', 'charging', 'CS-3', 'Ultra-fast charge 40% to 91%', 680.0, 39.4, 35, datetime('now', '-4 hours'), 'completed', 14, NULL);

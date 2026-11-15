@@ -173,6 +173,7 @@ int main() {
 
     ChargingQueue restoredQueue;
     int restoredCount = restartService.rehydrateChargingQueue(restoredQueue);
+
     // Seed data has EV-102 (-10m), EV-104 (-5m), and EV-125 (-2m) as 'waiting'
     assert(restoredCount >= 3 && "Should recover all waiting EVs from SQLite");
     assert(restoredQueue.getSize() >= 3);
@@ -331,6 +332,109 @@ int main() {
 
     tieBreakDb.close();
     std::remove(dbFile.c_str());
+
+    // ─── 14. Test Complete Customer Charging Journey (Phases 5-10) ───────────
+    std::cout << "\n--- Testing Customer Charging Journey & Request Pipeline ---\n";
+    std::string journeyDbFile = "test_journey.db";
+    std::remove(journeyDbFile.c_str());
+    std::remove((journeyDbFile + "-wal").c_str());
+    std::remove((journeyDbFile + "-shm").c_str());
+
+    Database journeyDb(journeyDbFile);
+    assert(journeyDb.open());
+    bool journeySchema = journeyDb.initSchema("../database/schema.sql") ||
+                         journeyDb.initSchema("backend/database/schema.sql") ||
+                         journeyDb.initSchema("database/schema.sql");
+    assert(journeySchema);
+    StationService journeyService(&journeyDb);
+    ChargingQueue journeyQueue;
+    journeyQueue.clear();
+
+    // 14.1 Reject request when user does not own EV (EV-101 owned by User 9, attempt with User 10)
+    ChargingRequest badReq;
+    ChargingSession badSes;
+    bool badAlloc = false;
+    bool rejectOwnership = journeyService.createChargingRequest(10, "EV-101", "CS-2", 85.0, badReq, badSes, badAlloc, &journeyQueue);
+    assert(!rejectOwnership && "Must reject charging request when EV is owned by another user");
+    std::cout << "[PASS] Ownership validation verified: User 10 prevented from requesting charge for User 9's vehicle.\n";
+
+    // 14.2 Reject request when target SoC <= current SoC (EV-103 has 74.0%, target 50.0%)
+    bool rejectSoc = journeyService.createChargingRequest(11, "EV-103", "CS-2", 50.0, badReq, badSes, badAlloc, &journeyQueue);
+    assert(!rejectSoc && "Must reject charging request when target SoC <= current SoC");
+    std::cout << "[PASS] SoC validation verified: Target SoC lower than current SoC rejected.\n";
+
+    // 14.3 Valid Request with available station CS-2 -> Immediate Allocation & Active Session
+    ChargingRequest validReq;
+    ChargingSession validSes;
+    bool validAlloc = false;
+    bool goodReq = journeyService.createChargingRequest(11, "EV-103", "CS-2", 90.0, validReq, validSes, validAlloc, &journeyQueue);
+    assert(goodReq && "Valid charging request must succeed");
+    assert(validAlloc == true && "Free station CS-2 must be allocated immediately");
+    assert(validReq.getStatus() == "allocated");
+    assert(validReq.getStationId() == "CS-2");
+    assert(validSes.getId().rfind("SES-", 0) == 0);
+    assert(validSes.getStatus() == "active");
+    std::cout << "[PASS] Immediate bay allocation verified: EV-103 allocated to CS-2 with active session.\n";
+
+    // 14.4 Test Live Progress Calculation (Phase 8 Constant Power Model)
+    ChargingSession progSes;
+    double liveSoC = 0.0, deliveredKWh = 0.0, liveCost = 0.0;
+    int elapsed = 0;
+    bool progOk = journeyService.getSessionProgress(validSes.getId(), progSes, liveSoC, deliveredKWh, liveCost, elapsed);
+    assert(progOk);
+    assert(liveSoC >= validSes.getBatteryStart());
+    assert(liveSoC <= validSes.getTargetCharge());
+    assert(liveCost > 0.0);
+    std::cout << "[PASS] Constant-power simulation verified: Live SoC, energy, and cost calculated deterministically.\n";
+
+    // 14.5 Valid Request when all stations busy -> Queue Entry (EV-105 owned by User 13)
+    ChargingRequest queueReq;
+    ChargingSession queueSes;
+    bool queueAlloc = false;
+    journeyService.updateStationStatus("CS-3", "charging");
+    bool queuedOk = journeyService.createChargingRequest(13, "EV-105", "", 95.0, queueReq, queueSes, queueAlloc, &journeyQueue);
+    assert(queuedOk);
+    assert(queueAlloc == false && "Must enter queue when stations are busy");
+    assert(queueReq.getStatus() == "queued");
+    assert(journeyQueue.getSize() == 1);
+    assert(journeyQueue.peek() == "EV-105");
+    std::cout << "[PASS] FIFO Queue entry verified: EV-105 added to queue when all bays busy.\n";
+
+    // 14.6 User Request & Session Filtering
+    ChargingRequest u11Reqs[MAX_REQUESTS];
+    int u11Count = journeyService.getAllRequests(u11Reqs, MAX_REQUESTS, 11);
+    assert(u11Count >= 1);
+    for (int i = 0; i < u11Count; i++) {
+        assert(u11Reqs[i].getUserId() == 11);
+    }
+
+    ChargingRequest u15Reqs[MAX_REQUESTS];
+    int u15Count = journeyService.getAllRequests(u15Reqs, MAX_REQUESTS, 15);
+    assert(u15Count == 0 && "User 15 with no requests should receive 0 records");
+    std::cout << "[PASS] Request isolation verified: Users only retrieve their own charging requests.\n";
+
+    // 14.7 Complete Session with Queue Dispatch & Authorization
+    ChargingSession unauthorizedComp;
+    Transaction unauthorizedTxn;
+    bool stopDenied = journeyService.completeChargingSession(validSes.getId(), unauthorizedComp, unauthorizedTxn, &journeyQueue, nullptr, 10, "user");
+    assert(!stopDenied && "User 10 cannot stop User 11's session");
+
+    ChargingSession authComp;
+    Transaction authTxn;
+    ChargingSession autoDispatchedSes;
+    bool stopOk = journeyService.completeChargingSession(validSes.getId(), authComp, authTxn, &journeyQueue, &autoDispatchedSes, 11, "user");
+    assert(stopOk);
+    assert(authComp.getStatus() == "completed");
+    assert(authComp.getBatteryEnd() == 90.0);
+    assert(authTxn.getUserId() == 11);
+    assert(!autoDispatchedSes.getId().empty() && "Waiting EV-105 auto-dispatched to released bay CS-2");
+    assert(autoDispatchedSes.getVehicleId() == "EV-105");
+    std::cout << "[PASS] Complete workflow verified: Session completed, SoC updated to 90%, auto-dispatched EV-105 from queue.\n";
+
+    journeyDb.close();
+    std::remove(journeyDbFile.c_str());
+    std::remove((journeyDbFile + "-wal").c_str());
+    std::remove((journeyDbFile + "-shm").c_str());
 
     std::cout << "\n>>> ALL MRITUNJAY THAKUR (CHARGING BACKEND & FIFO QUEUE) TESTS PASSED! <<<\n";
     return 0;

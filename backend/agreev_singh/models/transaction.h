@@ -32,6 +32,8 @@ private:
     int duration;                  // Session duration in minutes
     std::string timestamp;         // Completion timestamp (YYYY-MM-DD HH:MM:SS)
     std::string status;            // Transaction status: "completed", "pending", "failed"
+    int userId;                    // Associated user ID
+    std::string sessionId;         // Optional associated ChargingSession ID
 
 public:
     // ------------------------------------------------------------------------
@@ -50,13 +52,15 @@ public:
         duration = 0;
         timestamp = "";
         status = "completed";
+        userId = 0;
+        sessionId = "";
     }
 
     // Parameterized constructor: fully initializes all transaction attributes
     Transaction(std::string tId, std::string vId, std::string tType,
                 std::string target, std::string desc, double amt,
                 double energy = 0.0, int dur = 0, std::string timeStr = "",
-                std::string stat = "completed") {
+                std::string stat = "completed", int uId = 0, std::string sesId = "") {
         id = tId;
         vehicleId = vId;
         type = tType;
@@ -67,6 +71,8 @@ public:
         duration = (dur >= 0) ? dur : 0;
         timestamp = timeStr;
         status = stat.empty() ? "completed" : stat;
+        userId = uId;
+        sessionId = sesId;
     }
 
     // ------------------------------------------------------------------------
@@ -82,6 +88,8 @@ public:
     int getDuration() const { return duration; }
     std::string getTimestamp() const { return timestamp; }
     std::string getStatus() const { return status; }
+    int getUserId() const { return userId; }
+    std::string getSessionId() const { return sessionId; }
 
     // ------------------------------------------------------------------------
     // Setters (Encapsulation - OOP Lab 5)
@@ -96,6 +104,8 @@ public:
     void setDuration(int dur) { duration = (dur >= 0) ? dur : 0; }
     void setTimestamp(const std::string& ts) { timestamp = ts; }
     void setStatus(const std::string& stat) { status = stat; }
+    void setUserId(int uId) { userId = uId; }
+    void setSessionId(const std::string& sesId) { sessionId = sesId; }
 
     // ------------------------------------------------------------------------
     // Validation Rule Method

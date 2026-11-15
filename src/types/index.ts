@@ -70,6 +70,13 @@ export interface ChargingSession {
   estimatedCost: number;    // INR
   status: SessionStatus;
   energyConsumed?: number;
+  bayId?: string;
+  userId?: number;
+  requestId?: string;
+  currentCharge?: number;
+  elapsedSeconds?: number;
+  power?: number;
+  efficiency?: number;
 }
 
 // ─── Transaction Types ───────────────────────────────────────────────────────
@@ -87,6 +94,9 @@ export interface Transaction {
   energyDelivered: number;  // kWh
   duration: number;         // minutes
   status: TransactionStatus;
+  description?: string;
+  userId?: number;
+  sessionId?: string;
 }
 
 // ─── Queue Types ─────────────────────────────────────────────────────────────
@@ -96,9 +106,16 @@ export interface ChargingRequest {
   evId: string;
   evModel: string;
   owner: string;
-  requestedAt: string;      // ISO date string
-  currentCharge: number;    // percentage
+  requestedAt: string;
+  currentCharge: number;
   priority: 'normal' | 'urgent';
+  userId?: number;
+  vehicleId?: string;
+  stationId?: string;
+  bayId?: string;
+  targetCharge?: number;
+  status?: 'queued' | 'allocated' | 'active' | 'completed' | 'cancelled' | 'failed';
+  createdAt?: string;
 }
 
 export interface SwapRequest {
