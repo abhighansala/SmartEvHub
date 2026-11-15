@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import type {
   User, EV, Station, Battery, ChargingSession, Transaction,
   ChargingRequest, SwapRequest, Notification, AppSettings,
@@ -208,12 +208,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // Synchronize with C++ Crow Backend
-  const refreshBackendData = useCallback(async () => {
-    try {
-      await api.checkHealth();
-      setIsBackendOnline(true);
+  // In-flight guard and EV state reference to prevent re-fetch cascade loops
+  const isRefreshingRef = useRef(false);
+  const evsRef = useRef(evs);
+  useEffect(() => {
+    evsRef.current = evs;
+  }, [evs]);
 
+  // Synchronize with C++ Crow Backend (with in-flight guard and deduplication)
+  const refreshBackendData = useCallback(async () => {
+    if (isRefreshingRef.current) return;
+    isRefreshingRef.current = true;
+
+    try {
       // Fetch live DSA Queues, Stack, entities, sessions & transactions in parallel
       const [cQueue, sQueue, tStack, backendEVs, backendStations, backendBatteries, backendTxns, backendSessions] = await Promise.all([
         api.getChargingQueue().catch(() => null),
@@ -225,6 +232,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         api.getTransactions().catch(() => null),
         api.getSessions().catch(() => null),
       ]);
+
+      const hasBackendResponded = !!(cQueue || sQueue || tStack || backendEVs || backendStations || backendBatteries || backendTxns || backendSessions);
+      setIsBackendOnline(hasBackendResponded);
 
       if (cQueue) {
         setChargingQueueMeta({
@@ -253,7 +263,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
 
       // Update SQLite entity states
-      let effectiveEVs = evs;
+      let effectiveEVs = evsRef.current;
       if (backendEVs && Array.isArray(backendEVs)) {
         setEVs(backendEVs);
         effectiveEVs = backendEVs;
@@ -305,11 +315,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     } catch (err) {
       setIsBackendOnline(false);
+    } finally {
+      isRefreshingRef.current = false;
     }
-  }, [evs]);
+  }, []);
 
+  // Controlled sync on mount + gentle polling every 10 seconds (paused when tab hidden)
   useEffect(() => {
     refreshBackendData();
+
+    const interval = setInterval(() => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        refreshBackendData();
+      }
+    }, 10000);
+
+    return () => clearInterval(interval);
   }, [refreshBackendData]);
 
   // ─── Live Charging Simulation Engine ─────────────────────

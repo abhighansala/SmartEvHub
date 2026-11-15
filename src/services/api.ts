@@ -3,13 +3,49 @@
 // Role: UI + DSA + Final Integration
 // Owner: Abhishek Ghansala (Student ID: 2518132, Section H)
 // Connects the React UI to the C++ Crow Backend on http://localhost:8080
-// Features: Bearer JWT Authorization, robust error handling, full CRUD
+// Features: Bearer JWT Authorization, robust error handling, full CRUD,
+//           In-flight request deduplication & short-lived read caching
 // ============================================================================
 
 const API_BASE = (import.meta as any).env?.VITE_API_URL || 'http://localhost:8080/api';
 
+// In-flight request deduplication map for GET requests
+const inFlightRequests = new Map<string, Promise<any>>();
+
+// Short-lived response cache for GET requests (TTL: 1500ms)
+interface CacheEntry {
+  data: any;
+  timestamp: number;
+}
+const getCache = new Map<string, CacheEntry>();
+const CACHE_TTL_MS = 1500;
+
+export function clearApiCache() {
+  getCache.clear();
+  inFlightRequests.clear();
+}
+
 // Helper to make fetch requests with auth token, timeout and error handling
 async function request(endpoint: string, options: RequestInit = {}) {
+  const method = (options.method || 'GET').toUpperCase();
+  const isGet = method === 'GET';
+
+  // If this is a mutation (POST, PUT, DELETE), clear read cache immediately
+  if (!isGet) {
+    getCache.clear();
+  } else {
+    // Check short-lived cache first
+    const cached = getCache.get(endpoint);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+      return JSON.parse(JSON.stringify(cached.data));
+    }
+
+    // Check if an identical GET request is currently in-flight
+    if (inFlightRequests.has(endpoint)) {
+      return inFlightRequests.get(endpoint);
+    }
+  }
+
   const url = `${API_BASE}${endpoint}`;
   const token = localStorage.getItem('authToken');
 
@@ -19,24 +55,47 @@ async function request(endpoint: string, options: RequestInit = {}) {
     ...(options.headers as Record<string, string> || {}),
   };
 
-  const response = await fetch(url, {
-    ...options,
-    headers,
-  });
+  const fetchPromise = (async () => {
+    try {
+      const response = await fetch(url, {
+        ...options,
+        headers,
+      });
 
-  if (!response.ok) {
-    if (response.status === 401 && endpoint !== '/login' && endpoint !== '/register') {
-      // Clear expired token on unauthorized API call
-      localStorage.removeItem('authToken');
-      localStorage.removeItem('currentUser');
-      window.dispatchEvent(new Event('evhub-auth-expired'));
+      if (!response.ok) {
+        if (response.status === 401 && endpoint !== '/login' && endpoint !== '/register') {
+          // Clear expired token on unauthorized API call
+          localStorage.removeItem('authToken');
+          localStorage.removeItem('currentUser');
+          window.dispatchEvent(new Event('evhub-auth-expired'));
+        }
+        const errorData = await response.json().catch(() => ({}));
+        const message = errorData.message || `Request failed with status ${response.status}`;
+        throw new Error(message);
+      }
+
+      const data = await response.json();
+
+      if (isGet) {
+        getCache.set(endpoint, {
+          data,
+          timestamp: Date.now(),
+        });
+      }
+
+      return data;
+    } finally {
+      if (isGet) {
+        inFlightRequests.delete(endpoint);
+      }
     }
-    const errorData = await response.json().catch(() => ({}));
-    const message = errorData.message || `Request failed with status ${response.status}`;
-    throw new Error(message);
+  })();
+
+  if (isGet) {
+    inFlightRequests.set(endpoint, fetchPromise);
   }
 
-  return response.json();
+  return fetchPromise;
 }
 
 export const api = {
