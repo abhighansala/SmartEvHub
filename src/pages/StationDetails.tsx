@@ -35,7 +35,7 @@ export default function StationDetails() {
     );
   }
 
-  const session = sessions.find(s => s.stationId === station.id);
+  const session = sessions.find(s => s.stationId === station.id && s.status === 'active');
 
   const getDuration = (start: string) => {
     const diff = Date.now() - new Date(start).getTime();

@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:backend": "node scripts/dev-backend.js",
+    "dev:full": "node scripts/dev-full.js",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview"
   },

@@ -35,7 +35,8 @@ export default function Dashboard() {
 
   const totalEVs = evs.length;
   const totalStations = stations.length;
-  const currentlyCharging = sessions.length;
+  const activeSessions = sessions.filter(s => s.status === 'active');
+  const currentlyCharging = activeSessions.length;
   const inQueue = chargingQueue.length;
   const availableBatteries = batteries.filter(b => b.status === 'available').length;
 
@@ -271,7 +272,7 @@ export default function Dashboard() {
             View All
           </Button>
         </Box>
-        {sessions.length === 0 ? (
+        {activeSessions.length === 0 ? (
           <Typography variant="body2" color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>
             No active charging sessions.
           </Typography>
@@ -290,7 +291,7 @@ export default function Dashboard() {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {sessions.map(s => {
+                {activeSessions.map(s => {
                   const progress = Math.min(
                     s.batteryStart + (s.targetCharge - s.batteryStart) * 0.6,
                     s.targetCharge
