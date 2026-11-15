@@ -192,6 +192,19 @@ export const api = {
     });
   },
 
+  async cancelChargingRequest(requestId: string) {
+    return request('/charging/request/' + encodeURIComponent(requestId) + '/cancel', {
+      method: 'POST',
+    });
+  },
+
+  async allocateBayManually(requestId: string, stationId: string) {
+    return request('/charging/allocate', {
+      method: 'POST',
+      body: JSON.stringify({ requestId, stationId }),
+    });
+  },
+
   async updateStationStatus(id: string, status: string) {
     return request(`/stations/${id}/status`, {
       method: 'PUT',

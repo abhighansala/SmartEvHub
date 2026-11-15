@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS ChargingRequest (
     station_id TEXT DEFAULT NULL,
     bay_id TEXT DEFAULT NULL,
     target_charge REAL NOT NULL DEFAULT 85.0,
+    connector_type TEXT NOT NULL DEFAULT 'CCS2' CHECK(connector_type IN ('Type 2', 'CCS2', 'CHAdeMO', 'GB/T')),
     status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued', 'allocated', 'active', 'completed', 'cancelled', 'failed')),
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(user_id) REFERENCES Users(id) ON DELETE CASCADE,

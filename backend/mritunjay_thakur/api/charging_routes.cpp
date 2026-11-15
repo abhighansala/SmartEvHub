@@ -107,7 +107,7 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
         return crow::response(200, finalRes);
     });
 
-    // GET /api/sessions/<string> - Detailed session metrics and live simulated progress (Phase 7 & 8)
+    // GET /api/sessions/<string> - Detailed session metrics and live simulated progress
     CROW_ROUTE(app, "/api/sessions/<string>").methods(crow::HTTPMethod::GET)
     ([&stationService](const crow::request& req, const std::string& sessionId){
         crow::response res;
@@ -129,7 +129,7 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
             return crow::response(404, err);
         }
 
-        // Ownership enforcement (Phase 14)
+        // Ownership enforcement: User cannot view another customer's session
         if (claims.role == "user" && session.getUserId() > 0 && session.getUserId() != claims.userId) {
             crow::json::wvalue err;
             err["success"] = false;
@@ -166,10 +166,12 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
         s["power"] = 50.0;
         s["efficiency"] = 0.92;
 
-        return crow::response(200, s);
+        crow::json::wvalue wrapper;
+        wrapper["session"] = std::move(s);
+        return crow::response(200, wrapper);
     });
 
-    // GET /api/charging/requests - Retrieve customer charging requests (Phase 5)
+    // GET /api/charging/requests - Retrieve customer charging requests (filtered by user ownership if role is 'user')
     CROW_ROUTE(app, "/api/charging/requests").methods(crow::HTTPMethod::GET)
     ([&stationService](const crow::request& req){
         crow::response res;
@@ -186,6 +188,16 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
         ChargingRequest list[MAX_REQUESTS];
         int count = stationService.getAllRequests(list, MAX_REQUESTS, userId);
 
+        // Fetch all queued requests to compute FIFO queue positions accurately
+        ChargingRequest allQueued[MAX_REQUESTS];
+        int allQueuedCount = stationService.getAllRequests(allQueued, MAX_REQUESTS, 0);
+        std::vector<std::string> queuedFifoIds;
+        for (int i = allQueuedCount - 1; i >= 0; i--) { // getAllRequests is ordered by created_at DESC
+            if (allQueued[i].getStatus() == "queued") {
+                queuedFifoIds.push_back(allQueued[i].getId());
+            }
+        }
+
         crow::json::wvalue::list reqList;
         for (int i = 0; i < count; i++) {
             crow::json::wvalue r;
@@ -195,13 +207,65 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
             r["stationId"] = list[i].getStationId();
             r["bayId"] = list[i].getBayId();
             r["targetCharge"] = list[i].getTargetCharge();
+            r["connectorType"] = list[i].getConnectorType();
             r["status"] = list[i].getStatus();
             r["createdAt"] = list[i].getCreatedAt();
+
+            // Calculate 1-based queue position if queued
+            int queuePos = 0;
+            if (list[i].getStatus() == "queued") {
+                for (size_t p = 0; p < queuedFifoIds.size(); p++) {
+                    if (queuedFifoIds[p] == list[i].getId()) {
+                        queuePos = static_cast<int>(p + 1);
+                        break;
+                    }
+                }
+            }
+            r["queuePosition"] = queuePos;
+
             reqList.push_back(std::move(r));
         }
 
         crow::json::wvalue finalRes = std::move(reqList);
         return crow::response(200, finalRes);
+    });
+
+    // GET /api/charging/request/<string> - Single customer charging request details
+    CROW_ROUTE(app, "/api/charging/request/<string>").methods(crow::HTTPMethod::GET)
+    ([&stationService](const crow::request& req, const std::string& requestId){
+        crow::response res;
+        security::JwtClaims claims;
+        if (!security::JwtUtil::requireAuth(req, res, claims)) {
+            return res;
+        }
+
+        ChargingRequest request;
+        if (!stationService.getRequestById(requestId, request)) {
+            crow::json::wvalue err;
+            err["success"] = false;
+            err["message"] = "Charging request not found with ID: " + requestId;
+            return crow::response(404, err);
+        }
+
+        if (claims.role == "user" && request.getUserId() > 0 && request.getUserId() != claims.userId) {
+            crow::json::wvalue err;
+            err["success"] = false;
+            err["message"] = "Access forbidden: you do not have permission to view this charging request";
+            return crow::response(403, err);
+        }
+
+        crow::json::wvalue r;
+        r["id"] = request.getId();
+        r["userId"] = request.getUserId();
+        r["vehicleId"] = request.getVehicleId();
+        r["stationId"] = request.getStationId();
+        r["bayId"] = request.getBayId();
+        r["targetCharge"] = request.getTargetCharge();
+        r["connectorType"] = request.getConnectorType();
+        r["status"] = request.getStatus();
+        r["createdAt"] = request.getCreatedAt();
+
+        return crow::response(200, r);
     });
 
     // POST /api/charging/request - Request a charging bay (assigns bay or enqueues in FIFO ChargingQueue)
@@ -210,7 +274,6 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
         crow::response authRes;
         security::JwtClaims claims;
         int callerUserId = 0;
-        // Verify JWT authentication (Phase 14)
         if (!security::JwtUtil::requireAuth(req, authRes, claims)) {
             return authRes;
         }
@@ -237,12 +300,17 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
             requestedStationId = json["stationId"].s();
         }
 
+        std::string connectorType = "CCS2";
+        if (json.has("connectorType")) {
+            connectorType = json["connectorType"].s();
+        }
+
         ChargingRequest newRequest;
         ChargingSession newSession;
         bool allocated = false;
 
         bool ok = stationService.createChargingRequest(callerUserId, evId, requestedStationId, targetCharge,
-                                                       newRequest, newSession, allocated, &chargingQueue);
+                                                       newRequest, newSession, allocated, &chargingQueue, connectorType);
         if (!ok) {
             res["success"] = false;
             res["message"] = "Charging request rejected. Ensure EV is owned by you, not already charging/queued, and target SoC (" +
@@ -253,14 +321,20 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
         res["success"] = true;
         res["requestId"] = newRequest.getId();
         res["assigned"] = allocated;
+        res["allocated"] = allocated;
         res["queued"] = !allocated;
         res["stationId"] = newRequest.getStationId();
         res["bayId"] = newRequest.getBayId();
         res["targetCharge"] = newRequest.getTargetCharge();
+        res["connectorType"] = newRequest.getConnectorType();
 
         if (allocated) {
             res["sessionId"] = newSession.getId();
             res["estimatedCost"] = newSession.getEstimatedCost();
+            res["session"]["id"] = newSession.getId();
+            res["session"]["stationId"] = newSession.getStationId();
+            res["session"]["evId"] = newSession.getVehicleId();
+            res["session"]["estimatedCost"] = newSession.getEstimatedCost();
             res["message"] = "Assigned to Station " + newRequest.getStationId() + " (" + newRequest.getBayId() + ")";
         } else {
             res["queueSize"] = chargingQueue.getSize();
@@ -268,6 +342,124 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
         }
 
         return crow::response(200, res);
+    });
+
+    // POST /api/charging/request/<string>/cancel - Cancel a customer charging request
+    CROW_ROUTE(app, "/api/charging/request/<string>/cancel").methods(crow::HTTPMethod::POST)
+    ([&stationService, &chargingQueue](const crow::request& req, const std::string& requestId){
+        crow::response authRes;
+        security::JwtClaims claims;
+        if (!security::JwtUtil::requireAuth(req, authRes, claims)) {
+            return authRes;
+        }
+
+        ChargingRequest existingReq;
+        if (!stationService.getRequestById(requestId, existingReq)) {
+            crow::json::wvalue err;
+            err["success"] = false;
+            err["message"] = "Charging request not found with ID: " + requestId;
+            return crow::response(404, err);
+        }
+
+        if (claims.role == "user" && claims.userId > 0 && existingReq.getUserId() != claims.userId) {
+            crow::json::wvalue err;
+            err["success"] = false;
+            err["message"] = "Access forbidden: you do not have permission to cancel another customer's request";
+            return crow::response(403, err);
+        }
+
+        if (stationService.cancelChargingRequest(requestId, claims.userId, claims.role, &chargingQueue)) {
+            crow::json::wvalue res;
+            res["success"] = true;
+            res["message"] = "Charging request " + requestId + " cancelled successfully";
+            return crow::response(200, res);
+        } else {
+            crow::json::wvalue err;
+            err["success"] = false;
+            err["message"] = "Could not cancel charging request. Request may already be completed or cancelled.";
+            return crow::response(400, err);
+        }
+    });
+
+    // DELETE /api/charging/requests/<string> - Cancel / delete a charging request
+    CROW_ROUTE(app, "/api/charging/requests/<string>").methods(crow::HTTPMethod::Delete)
+    ([&stationService, &chargingQueue](const crow::request& req, const std::string& requestId){
+        crow::response authRes;
+        security::JwtClaims claims;
+        if (!security::JwtUtil::requireAuth(req, authRes, claims)) {
+            return authRes;
+        }
+
+        ChargingRequest existingReq;
+        if (!stationService.getRequestById(requestId, existingReq)) {
+            crow::json::wvalue err;
+            err["success"] = false;
+            err["message"] = "Charging request not found with ID: " + requestId;
+            return crow::response(404, err);
+        }
+
+        if (claims.role == "user" && claims.userId > 0 && existingReq.getUserId() != claims.userId) {
+            crow::json::wvalue err;
+            err["success"] = false;
+            err["message"] = "Access forbidden: you do not have permission to delete another customer's request";
+            return crow::response(403, err);
+        }
+
+        if (stationService.cancelChargingRequest(requestId, claims.userId, claims.role, &chargingQueue)) {
+            crow::json::wvalue res;
+            res["success"] = true;
+            res["message"] = "Charging request " + requestId + " removed successfully";
+            return crow::response(200, res);
+        } else {
+            crow::json::wvalue err;
+            err["success"] = false;
+            err["message"] = "Could not remove charging request.";
+            return crow::response(400, err);
+        }
+    });
+
+    // POST /api/charging/allocate - Manually allocate a queued request to an available bay (Operator / Admin only)
+    CROW_ROUTE(app, "/api/charging/allocate").methods(crow::HTTPMethod::POST)
+    ([&stationService, &chargingQueue](const crow::request& req){
+        crow::response authRes;
+        security::JwtClaims claims;
+        if (!security::JwtUtil::requireAuth(req, authRes, claims)) {
+            return authRes;
+        }
+        if (claims.role != "operator" && claims.role != "admin") {
+            crow::json::wvalue err;
+            err["success"] = false;
+            err["message"] = "Access forbidden: Only operators and admins can manually allocate charging bays";
+            return crow::response(403, err);
+        }
+
+        auto json = crow::json::load(req.body);
+        if (!json || !json.has("requestId") || !json.has("stationId")) {
+            crow::json::wvalue err;
+            err["success"] = false;
+            err["message"] = "Fields 'requestId' and 'stationId' are required";
+            return crow::response(400, err);
+        }
+
+        std::string requestId = json["requestId"].s();
+        std::string stationId = json["stationId"].s();
+
+        ChargingRequest outReq;
+        ChargingSession outSes;
+        if (stationService.allocateBayManually(requestId, stationId, outReq, outSes, &chargingQueue, claims.userId, claims.role)) {
+            crow::json::wvalue res;
+            res["success"] = true;
+            res["message"] = "Manually allocated request " + requestId + " to station " + stationId;
+            res["requestId"] = outReq.getId();
+            res["stationId"] = outReq.getStationId();
+            res["sessionId"] = outSes.getId();
+            return crow::response(200, res);
+        } else {
+            crow::json::wvalue err;
+            err["success"] = false;
+            err["message"] = "Could not allocate bay. Ensure request is queued and station is available and compatible.";
+            return crow::response(400, err);
+        }
     });
 
     // POST /api/charging/complete - Complete charging session, record transaction & dispatch FIFO waiting EV
@@ -306,6 +498,23 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
             return crow::response(400, res);
         }
 
+        // Ownership enforcement: Check if session belongs to caller if caller is a normal user
+        ChargingSession activeSession;
+        bool sessionFound = false;
+        if (identifier.rfind("SES-", 0) == 0) {
+            sessionFound = stationService.getSessionById(identifier, activeSession);
+        } else {
+            sessionFound = stationService.getActiveSessionByStationId(identifier, activeSession);
+        }
+
+        if (sessionFound && hasAuth && claims.role == "user" && claims.userId > 0) {
+            if (activeSession.getUserId() > 0 && activeSession.getUserId() != claims.userId) {
+                res["success"] = false;
+                res["message"] = "Access forbidden: you do not have permission to complete another customer's charging session";
+                return crow::response(403, res);
+            }
+        }
+
         ChargingSession completedSession;
         Transaction outTxn;
         ChargingSession dispatchedSession;
@@ -323,6 +532,10 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
             res["amount"] = outTxn.getAmount();
             res["energyDelivered"] = outTxn.getEnergyDelivered();
             res["finalCharge"] = completedSession.getBatteryEnd();
+
+            res["transaction"]["id"] = outTxn.getId();
+            res["transaction"]["amount"] = outTxn.getAmount();
+            res["transaction"]["energyDelivered"] = outTxn.getEnergyDelivered();
 
             if (!dispatchedSession.getId().empty()) {
                 res["dispatched"] = true;

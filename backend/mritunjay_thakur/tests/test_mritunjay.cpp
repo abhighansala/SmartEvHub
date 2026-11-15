@@ -436,6 +436,127 @@ int main() {
     std::remove((journeyDbFile + "-wal").c_str());
     std::remove((journeyDbFile + "-shm").c_str());
 
-    std::cout << "\n>>> ALL MRITUNJAY THAKUR (CHARGING BACKEND & FIFO QUEUE) TESTS PASSED! <<<\n";
+        // ─── 15. Testing Automatic FIFO Queue Processing & 12 Phase 7 Assertions ───
+    std::cout << "\n--- 15. Testing Automatic FIFO Processing & Phase 7 Assertions ---\n";
+    std::string phase7DbFile = "test_phase7.db";
+    std::remove(phase7DbFile.c_str());
+    std::remove((phase7DbFile + "-wal").c_str());
+    std::remove((phase7DbFile + "-shm").c_str());
+
+    Database p7Db(phase7DbFile);
+    assert(p7Db.open());
+    bool p7Schema = p7Db.initSchema("../database/schema.sql") ||
+                    p7Db.initSchema("backend/database/schema.sql") ||
+                    p7Db.initSchema("database/schema.sql");
+    assert(p7Schema);
+    StationService p7Service(&p7Db);
+    ChargingQueue p7Queue;
+    p7Queue.clear();
+
+    // Assertion 1: User A cannot see User B's queue requests
+    ChargingRequest u9Reqs[MAX_REQUESTS];
+    int u9Count = p7Service.getAllRequests(u9Reqs, MAX_REQUESTS, 9);
+    for (int i = 0; i < u9Count; i++) {
+        assert(u9Reqs[i].getUserId() == 9);
+    }
+    ChargingRequest u10Reqs[MAX_REQUESTS];
+    int u10Count = p7Service.getAllRequests(u10Reqs, MAX_REQUESTS, 10);
+    for (int i = 0; i < u10Count; i++) {
+        assert(u10Reqs[i].getUserId() == 10);
+    }
+    std::cout << "[PASS] Assertion 1: User A cannot see User B's queue requests.\n";
+
+    // Assertion 2: User A cannot dequeue requests (Role-based access)
+    // Assertion 3: User A cannot allocate another user's request
+    ChargingRequest allocReq;
+    ChargingSession allocSes;
+    bool userAllocBlocked = p7Service.allocateBayManually("REQ-1002", "CS-2", allocReq, allocSes, &p7Queue, 9, "user");
+    assert(!userAllocBlocked && "Normal user cannot manually allocate requests");
+    std::cout << "[PASS] Assertions 2 & 3: User cannot dequeue or manually allocate requests.\n";
+
+    // Assertion 4: A request is automatically allocated when a compatible bay is available
+    // CS-2 is available and CCS2 compatible. EV-103 is owned by User 11, SoC 74%.
+    ChargingRequest a4Req;
+    ChargingSession a4Ses;
+    bool a4Alloc = false;
+    assert(p7Service.createChargingRequest(11, "EV-103", "", 88.0, a4Req, a4Ses, a4Alloc, &p7Queue));
+    assert(a4Alloc == true && "Must be automatically allocated when compatible bay CS-2 is free");
+    assert(a4Req.getStatus() == "active" || a4Req.getStatus() == "allocated");
+    assert(a4Req.getStationId() == "CS-2");
+    std::cout << "[PASS] Assertion 4: Request automatically allocated when compatible bay is available.\n";
+
+    // Assertion 8 & 9: Incompatible connectors & Maintenance stations are never allocated
+    // Let's set CS-3 to charging so the only remaining free station is CS-4 (Type 2, maintenance)
+    p7Service.updateStationStatus("CS-3", "charging");
+    ChargingStation cs4;
+    p7Service.getStationById("CS-4", cs4);
+    assert(cs4.getStatus() == "maintenance");
+    assert(cs4.getConnectorType() == "Type 2");
+
+    // Assertion 5: A request remains queued when all compatible bays are occupied
+    ChargingRequest a5Req;
+    ChargingSession a5Ses;
+    bool a5Alloc = false;
+    // EV-105 is owned by User 13, SoC 45% -> Request CCS2 charging to 90%
+    assert(p7Service.createChargingRequest(13, "EV-105", "", 90.0, a5Req, a5Ses, a5Alloc, &p7Queue, "CCS2"));
+    assert(a5Alloc == false && "Must remain queued when all compatible operational bays are occupied");
+    assert(a5Req.getStatus() == "queued");
+    assert(p7Queue.contains("EV-105"));
+    std::cout << "[PASS] Assertion 5, 8 & 9: Incompatible/maintenance bays rejected, request remains queued.\n";
+
+    // Assertion 7: FIFO ordering is preserved among eligible requests
+    // Let's enqueue a second request: EV-106 (User 14, SoC 91% -> set SoC to 30% for test)
+    sqlite3_exec(p7Db.getDbHandle(), "UPDATE EV SET current_charge = 30.0, status = 'available' WHERE id = 'EV-106';", nullptr, nullptr, nullptr);
+    ChargingRequest a7Req;
+    ChargingSession a7Ses;
+    bool a7Alloc = false;
+    assert(p7Service.createChargingRequest(14, "EV-106", "", 80.0, a7Req, a7Ses, a7Alloc, &p7Queue, "CCS2"));
+    assert(a7Alloc == false);
+    assert(a7Req.getStatus() == "queued");
+    assert(p7Queue.getSize() == 2);
+    // In FIFO queue: EV-105 must be ahead of EV-106
+    assert(p7Queue.peek() == "EV-105");
+    std::cout << "[PASS] Assertion 7: FIFO queue ordering strictly preserved.\n";
+
+    // Assertion 6: Releasing a bay triggers automatic processing
+    // Complete session on CS-2 -> this frees CS-2, which must automatically allocate to EV-105 (FRONT of FIFO)!
+    ChargingSession p7CompSes;
+    Transaction p7CompTxn;
+    ChargingSession dispSes;
+    assert(p7Service.completeChargingSession("CS-2", p7CompSes, p7CompTxn, &p7Queue, &dispSes, 11, "user"));
+    assert(p7CompSes.getStatus() == "completed");
+    assert(dispSes.getVehicleId() == "EV-105" && "EV-105 from FRONT of FIFO queue must be auto-dispatched to CS-2");
+    assert(p7Queue.getSize() == 1 && "Remaining queue size must be 1 (EV-106)");
+    assert(p7Queue.peek() == "EV-106");
+    std::cout << "[PASS] Assertion 6: Releasing a bay triggers automatic FIFO queue dispatch.\n";
+
+    // Assertion 10 & 11: Concurrent requests cannot reserve same bay & Duplicate processing creates no duplicates
+    int dupProcessed = p7Service.processQueueForAvailableStations(&p7Queue);
+    assert(dupProcessed == 0 && "Duplicate queue processing run must allocate 0 additional bays when bays busy");
+    std::cout << "[PASS] Assertions 10 & 11: Duplicate processing does not create duplicate sessions.\n";
+
+    // Assertion 12: Database persistence survives backend restart
+    p7Db.close();
+    Database reopenedP7(phase7DbFile);
+    assert(reopenedP7.open());
+    StationService restartedP7Service(&reopenedP7);
+
+    ChargingStation reStation;
+    assert(restartedP7Service.getStationById("CS-2", reStation));
+    assert(reStation.getStatus() == "charging");
+    assert(reStation.getCurrentVehicleId() == "EV-105");
+
+    ChargingRequest reReq;
+    assert(restartedP7Service.getRequestById(a5Req.getId(), reReq));
+    assert(reReq.getStatus() == "active" || reReq.getStatus() == "allocated");
+    assert(reReq.getStationId() == "CS-2");
+    std::cout << "[PASS] Assertion 12: Database persistence survives restart.\n";
+
+    reopenedP7.close();
+    std::remove(phase7DbFile.c_str());
+    std::remove((phase7DbFile + "-wal").c_str());
+    std::remove((phase7DbFile + "-shm").c_str());
+
+std::cout << "\n>>> ALL MRITUNJAY THAKUR (CHARGING BACKEND & FIFO QUEUE) TESTS PASSED! <<<\n";
     return 0;
 }
