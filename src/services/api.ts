@@ -6,7 +6,7 @@
 // Features: Bearer JWT Authorization, robust error handling, full CRUD
 // ============================================================================
 
-const API_BASE = 'http://localhost:8080/api';
+const API_BASE = (import.meta as any).env?.VITE_API_URL || 'http://localhost:8080/api';
 
 // Helper to make fetch requests with auth token, timeout and error handling
 async function request(endpoint: string, options: RequestInit = {}) {
