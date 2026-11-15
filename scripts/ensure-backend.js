@@ -1,6 +1,11 @@
 import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const defaultRootDir = path.resolve(__dirname, '..');
 
 /**
  * Ensures the C++ backend binary exists in backend/build.
@@ -22,10 +27,25 @@ export function ensureBackendBuilt(rootDir) {
   if (!needsBuild) {
     try {
       const exeMtime = fs.statSync(exePath).mtimeMs;
-      const mainMtime = fs.statSync(path.join(rootDir, 'backend', 'src', 'main.cpp')).mtimeMs;
-      if (mainMtime > exeMtime) {
-        needsBuild = true;
+      // Recursively check if any source file in backend/ is newer than the binary
+      function hasNewerSource(dir) {
+        if (!fs.existsSync(dir)) return false;
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          const fullPath = path.join(dir, entry.name);
+          if (entry.isDirectory()) {
+            if (entry.name !== 'build' && entry.name !== 'Crow' && !entry.name.startsWith('.')) {
+              if (hasNewerSource(fullPath)) return true;
+            }
+          } else if (/\.(cpp|h|hpp|c|txt)$/i.test(entry.name)) {
+            if (fs.statSync(fullPath).mtimeMs > exeMtime) {
+              return true;
+            }
+          }
+        }
+        return false;
       }
+      needsBuild = hasNewerSource(path.join(rootDir, 'backend'));
     } catch {}
   }
 
@@ -57,4 +77,8 @@ export function ensureBackendBuilt(rootDir) {
   }
 
   return exePath;
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
+  ensureBackendBuilt(defaultRootDir);
 }

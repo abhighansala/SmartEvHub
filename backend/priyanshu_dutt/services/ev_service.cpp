@@ -195,12 +195,12 @@ bool EVService::createEV(const EV& ev, std::string& outError) {
         sqlite3_stmt* stmt = nullptr;
 
         if (sqlite3_prepare_v2(handle, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
-            sqlite3_bind_text(stmt, 1, ev.getId().c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_text(stmt, 2, ev.getOwnerName().c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_text(stmt, 3, ev.getModel().c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 1, ev.getId().c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(stmt, 2, ev.getOwnerName().c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(stmt, 3, ev.getModel().c_str(), -1, SQLITE_TRANSIENT);
             sqlite3_bind_double(stmt, 4, ev.getBatteryCapacity());
             sqlite3_bind_double(stmt, 5, ev.getCurrentCharge());
-            sqlite3_bind_text(stmt, 6, ev.getStatus().c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 6, ev.getStatus().c_str(), -1, SQLITE_TRANSIENT);
             if (ev.getUserId() > 0) {
                 sqlite3_bind_int(stmt, 7, ev.getUserId());
             } else {
@@ -254,16 +254,16 @@ bool EVService::updateEV(const std::string& id, const EV& updatedEV, std::string
         sqlite3_stmt* stmt = nullptr;
 
         if (sqlite3_prepare_v2(handle, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
-            sqlite3_bind_text(stmt, 1, updatedEV.getOwnerName().c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_text(stmt, 2, updatedEV.getModel().c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 1, updatedEV.getOwnerName().c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(stmt, 2, updatedEV.getModel().c_str(), -1, SQLITE_TRANSIENT);
             sqlite3_bind_double(stmt, 3, updatedEV.getBatteryCapacity());
             sqlite3_bind_double(stmt, 4, updatedEV.getCurrentCharge());
-            sqlite3_bind_text(stmt, 5, updatedEV.getStatus().c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 5, updatedEV.getStatus().c_str(), -1, SQLITE_TRANSIENT);
             if (updatedEV.getUserId() > 0) {
                 sqlite3_bind_int(stmt, 6, updatedEV.getUserId());
-                sqlite3_bind_text(stmt, 7, id.c_str(), -1, SQLITE_STATIC);
+                sqlite3_bind_text(stmt, 7, id.c_str(), -1, SQLITE_TRANSIENT);
             } else {
-                sqlite3_bind_text(stmt, 6, id.c_str(), -1, SQLITE_STATIC);
+                sqlite3_bind_text(stmt, 6, id.c_str(), -1, SQLITE_TRANSIENT);
             }
 
             int rc = sqlite3_step(stmt);

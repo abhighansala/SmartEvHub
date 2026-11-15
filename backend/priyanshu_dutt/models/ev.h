@@ -46,14 +46,14 @@ public:
     }
 
     // Getters
-    std::string getId() const { return id; }
-    std::string getOwnerName() const { return ownerName; }
-    std::string getModel() const { return model; }
+    const std::string& getId() const { return id; }
+    const std::string& getOwnerName() const { return ownerName; }
+    const std::string& getModel() const { return model; }
     double getBatteryCapacity() const { return batteryCapacity; }
     double getCurrentCharge() const { return currentCharge; }
-    std::string getStatus() const { return status; }
-    std::string getLastActivity() const { return lastActivity; }
-    std::string getRegisteredAt() const { return registeredAt; }
+    const std::string& getStatus() const { return status; }
+    const std::string& getLastActivity() const { return lastActivity; }
+    const std::string& getRegisteredAt() const { return registeredAt; }
     int getUserId() const { return userId; }
 
     // Setters

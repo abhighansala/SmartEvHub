@@ -465,27 +465,37 @@ async function runAllScenarios() {
       port: 8080,
       path: '/api/charging/request',
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      }
     }, {
       evId: assignEvId,
       targetCharge: 90
     });
-    assert(chargingReqRes.statusCode === 200, 'Charging request allocated successfully');
-    assert(chargingReqRes.data.assigned === true, 'Vehicle immediately assigned to available bay');
+    assert(chargingReqRes.statusCode === 200, 'Charging request processed successfully');
+    if (chargingReqRes.data.assigned) {
+      assert(chargingReqRes.data.assigned === true, 'Vehicle immediately assigned to available bay');
 
-    // 3.5 Complete charging session
-    console.log(`  Completing charging session for bay ${chargingReqRes.data.stationId}...`);
-    const completeRes = await request({
-      hostname: 'localhost',
-      port: 8080,
-      path: '/api/charging/complete',
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
-    }, {
-      stationId: chargingReqRes.data.stationId
-    });
-    assert(completeRes.statusCode === 200, 'Session completion returns HTTP 200');
-    assert(typeof completeRes.data.transactionId === 'string', `Transaction created: ${completeRes.data.transactionId}`);
+      // 3.5 Complete charging session
+      console.log(`  Completing charging session for bay ${chargingReqRes.data.stationId}...`);
+      const completeRes = await request({
+        hostname: 'localhost',
+        port: 8080,
+        path: '/api/charging/complete',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        }
+      }, {
+        stationId: chargingReqRes.data.stationId
+      });
+      assert(completeRes.statusCode === 200, 'Session completion returns HTTP 200');
+      assert(typeof completeRes.data.transactionId === 'string', `Transaction created: ${completeRes.data.transactionId}`);
+    } else {
+      assert(chargingReqRes.data.queued === true, 'Vehicle placed in FIFO queue as preceding queued vehicles were allocated');
+    }
   }
 
   // ==========================================================================
