@@ -70,31 +70,51 @@ The project follows a clean separation of concerns, giving each team member an i
 
 ---
 
-## 4. Prerequisites
+## 4. System Prerequisites
 
-- **C++ Compiler**: GCC/MinGW-w64 (v11+) or MSVC (Visual Studio 2022) with C++20 support.
-- **CMake**: Version 3.16 or higher.
-- **Node.js**: Version 18.x, 20.x, or higher, and `npm`.
-- **Git**: For version control.
+The application can be built and run on Windows 10/11, Linux, or macOS. For Windows developers, the following prerequisites are required:
 
-*(Note: Crow and Asio dependencies are automatically fetched via CMake `FetchContent` — no manual library installation is required).*
+| Component | Minimum Version | Verified Version | Installation Notes |
+| :--- | :--- | :--- | :--- |
+| **Node.js** | `v18.x` | `v24.11.1` | Includes `npm` (`v11.6.2`). Download from [nodejs.org](https://nodejs.org/). |
+| **CMake** | `v3.20` | `v4.4.3` | Download from [cmake.org](https://cmake.org/). Ensure `cmake` is added to Windows `PATH`. |
+| **C++20 Compiler** | GCC 11+ or MSVC 2022 | MinGW-w64 GCC 16.1.0 | Must support C++20 standard (`-std=c++20`). E.g., [WinLibs MinGW-w64](https://winlibs.com/) or Visual Studio C++ build tools. |
+| **SQLite3** | Bundled in-tree | Amalgamation 3.x | **No installation required**. SQLite is bundled directly in the source tree at `backend/src/sqlite3.c`. |
+| **Crow & Asio** | Bundled / CMake | Crow v1.2.0, Asio 1-28-0 | **No installation required**. Automatically downloaded at build time via CMake `FetchContent`. |
 
 ---
 
-## 5. Environment Configuration
+## 5. Fresh Installation Guide (Step-by-Step)
 
-Copy the example environment file to `.env`:
+Follow these steps when starting from a newly extracted GitHub ZIP download or a fresh `git clone`:
+
+### Step 1: Open Terminal in Project Directory
+Open PowerShell or Windows Terminal and navigate to the project root:
 ```powershell
-cp .env.example .env
+cd C:\path\to\SmartEvHub
 ```
 
+### Step 2: Install Frontend Dependencies
+```powershell
+npm install
+```
+This installs React 19, Material-UI, Lucide icons, Vite, TypeScript, and developer tooling into `node_modules/`.
+
+### Step 3: Configure Environment Variables
+Copy the provided `.env.example` template:
+```powershell
+Copy-Item .env.example .env
+# Or in cmd: copy .env.example .env
+```
 Ensure your `.env` contains:
 ```env
-# Mandatory >= 32 characters for HMAC-SHA256 security
+# Mandatory >= 32 characters for HMAC-SHA256 token security
 JWT_SECRET=SmartEvHub_LocalDev_SecretKey_Minimum_32_Characters_2026_Secure!
 PORT=8080
 VITE_API_URL=http://localhost:8080/api
 ```
+
+*(Note: The startup scripts automatically supply a safe default development secret if `.env` is omitted, but creating `.env` is best practice).*
 
 ---
 
@@ -102,25 +122,33 @@ VITE_API_URL=http://localhost:8080/api
 
 ### Option A: Simultaneous One-Command Startup (Recommended)
 
-From the project root (`C:\SmartEvHub-Abhishek-Local`), run:
+From the project root, simply run:
 ```powershell
 npm run dev:full
 ```
-This runs the C++ Crow backend (with automated CMake build guard) and Vite React frontend concurrently with color-coded logging. Press `Ctrl+C` to terminate both services cleanly.
+**What this does automatically:**
+1. Validates that the C++ backend executable exists in `backend/build/`.
+2. If absent, automatically invokes CMake to configure and compile `smart_ev_hub_backend.exe`.
+3. Auto-creates the SQLite database (`backend/evhub.db`) and initializes all tables and seed data if not present.
+4. Starts the Crow C++ backend on **`http://localhost:8080`**.
+5. Starts the Vite React frontend on **`http://localhost:3000`**.
+6. Streams color-coded output from both processes to a single terminal window.
+7. Gracefully terminates both processes on `Ctrl+C`.
 
-### Option B: Independent Service Startup
+### Option B: Independent Service Startup (Two Terminals)
 
 **Terminal 1 — C++ Backend:**
 ```powershell
-# Using the Node launcher (loads .env and validates build):
+# Automated launcher (loads .env and handles compilation guard):
 npm run dev:backend
 
-# Or manually via CMake:
-cmake -B backend/build -S backend
+# Or manual CMake compilation:
+# On Windows (MinGW-w64):
+cmake -B backend/build -S backend -G "MinGW Makefiles"
 cmake --build backend/build
-backend/build/smart_ev_hub_backend.exe
+backend\build\smart_ev_hub_backend.exe
 ```
-Backend runs on: **`http://localhost:8080`**
+Backend runs on: **`http://localhost:8080`** (Health check: `http://localhost:8080/api/health`)
 
 **Terminal 2 — Frontend:**
 ```powershell
@@ -254,6 +282,37 @@ As required for 2nd-year Data Structures & Algorithms (PBL):
 
 ---
 
-## 10. License & Academic Integrity
+## 10. Windows Installation Troubleshooting & FAQ
+
+### Issue 1: `'nmake' '-?' failed with: no such file or directory`
+- **Cause**: On Windows systems without Microsoft Visual Studio Command Prompt loaded, CMake's default generator tries to use `NMake Makefiles`.
+- **Solution**: Explicitly configure CMake using MinGW Makefiles:
+  ```powershell
+  cmake -B backend/build -S backend -G "MinGW Makefiles"
+  cmake --build backend/build
+  ```
+
+### Issue 2: `Missing script: "dev:full"` or `Missing script: "dev:backend"`
+- **Cause**: The original upstream repository's `main` branch predates the integration scripts.
+- **Solution**: Ensure you are running on the integrated branch containing PR #8 (`feature/final-integration-testing`), which provides `scripts/dev-full.js`, `scripts/dev-backend.js`, and `scripts/test-e2e-scenarios.js`.
+
+### Issue 3: Port 8080 or Port 3000 already in use
+- **Cause**: A previous server instance or another local program is already bound to port 8080 or 3000.
+- **Solution**: In PowerShell, locate and terminate the process holding the port:
+  ```powershell
+  # Find processes listening on ports 8080 or 3000:
+  Get-NetTCPConnection -LocalPort 8080,3000 -State Listen | Format-Table -AutoSize
+
+  # Terminate lingering backend process:
+  Stop-Process -Name smart_ev_hub_backend -Force -ErrorAction SilentlyContinue
+  ```
+
+### Issue 4: `JWT_SECRET must be at least 32 characters long`
+- **Cause**: For security hardening against offline brute-force attacks, the C++ JWT utility enforces a minimum 32-character key length.
+- **Solution**: Ensure your `.env` contains a secret with at least 32 characters, or rely on `scripts/dev-backend.js` which automatically defaults to a 60-character safe dev secret if absent.
+
+---
+
+## 11. License & Academic Integrity
 
 Developed for **Project-Based Learning (PBL)** by the Smart EV Hub Team. All rights reserved.
