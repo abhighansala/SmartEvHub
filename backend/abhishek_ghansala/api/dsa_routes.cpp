@@ -1,13 +1,32 @@
 #include "dsa_routes.h"
+#include "../../aditya_singh/security/jwt_util.h"
+#include "../../aditya_singh/database/database.h"
+#include "../../mritunjay_thakur/services/station_service.h"
 
 void registerDSARoutes(crow::App<crow::CORSHandler>& app,
                        ChargingQueue& chargingQueue,
                        SwapQueue& swapQueue,
-                       TransactionStack& txnStack) {
+                       TransactionStack& txnStack,
+                       StationService* stationService,
+                       Database* db) {
 
-    // GET /api/charging/queue - Visual FIFO Charging Queue state
+    // GET /api/charging/queue - Visual FIFO Charging Queue state with strict User Data Isolation
     CROW_ROUTE(app, "/api/charging/queue").methods(crow::HTTPMethod::GET)
-    ([&chargingQueue](){
+    ([&chargingQueue, db](const crow::request& req){
+        std::string authHeader = req.get_header_value("Authorization");
+        security::JwtClaims claims;
+        bool isUser = false;
+        int userId = 0;
+        if (!authHeader.empty()) {
+            crow::response authRes;
+            if (security::JwtUtil::requireAuth(req, authRes, claims)) {
+                if (claims.role == "user") {
+                    isUser = true;
+                    userId = claims.userId;
+                }
+            }
+        }
+
         std::string items[CHARGING_QUEUE_CAPACITY];
         int count = chargingQueue.getItems(items, CHARGING_QUEUE_CAPACITY);
 
@@ -17,8 +36,42 @@ void registerDSARoutes(crow::App<crow::CORSHandler>& app,
         res["size"] = chargingQueue.getSize();
         res["capacity"] = CHARGING_QUEUE_CAPACITY;
 
-        for (int i = 0; i < count; i++) {
-            res["items"][i] = items[i];
+        if (isUser && userId > 0 && db != nullptr && db->isOpen()) {
+            // Find which items in the queue belong to the authenticated user
+            sqlite3* handle = db->getDbHandle();
+            int userPos = 0;
+            int outIdx = 0;
+            for (int i = 0; i < count; i++) {
+                std::string evId = items[i];
+                std::string sql = "SELECT user_id FROM EV WHERE id = ?;";
+                sqlite3_stmt* stmt = nullptr;
+                int ownerId = 0;
+                if (sqlite3_prepare_v2(handle, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
+                    sqlite3_bind_text(stmt, 1, evId.c_str(), -1, SQLITE_STATIC);
+                    if (sqlite3_step(stmt) == SQLITE_ROW) {
+                        ownerId = sqlite3_column_int(stmt, 0);
+                    }
+                    sqlite3_finalize(stmt);
+                }
+                if (ownerId == userId) {
+                    res["items"][outIdx++] = evId;
+                    if (userPos == 0) {
+                        userPos = i + 1; // 1-based queue position
+                    }
+                }
+            }
+            if (outIdx == 0) {
+                res["items"] = crow::json::wvalue::list();
+            }
+            res["userQueuePosition"] = userPos;
+        } else {
+            // Operator / Admin or unauthenticated demo mode: show all operational items
+            for (int i = 0; i < count; i++) {
+                res["items"][i] = items[i];
+            }
+            if (count == 0) {
+                res["items"] = crow::json::wvalue::list();
+            }
         }
 
         return crow::response(200, res);
@@ -39,6 +92,9 @@ void registerDSARoutes(crow::App<crow::CORSHandler>& app,
         for (int i = 0; i < count; i++) {
             res["items"][i] = items[i];
         }
+        if (count == 0) {
+            res["items"] = crow::json::wvalue::list();
+        }
 
         return crow::response(200, res);
     });
@@ -56,6 +112,9 @@ void registerDSARoutes(crow::App<crow::CORSHandler>& app,
 
         for (int i = 0; i < count; i++) {
             res["items"][i] = items[i];
+        }
+        if (count == 0) {
+            res["items"] = crow::json::wvalue::list();
         }
 
         return crow::response(200, res);
@@ -88,9 +147,23 @@ void registerDSARoutes(crow::App<crow::CORSHandler>& app,
         return crow::response(200, res);
     });
 
-    // POST /api/charging/dequeue - Process next EV from FRONT of Charging Queue (FIFO)
+    // POST /api/charging/dequeue - Process next EV from FRONT of Charging Queue (FIFO) (Operator / Admin only)
     CROW_ROUTE(app, "/api/charging/dequeue").methods(crow::HTTPMethod::POST)
-    ([&chargingQueue](){
+    ([&chargingQueue, stationService](const crow::request& req){
+        crow::response authRes;
+        security::JwtClaims claims;
+        if (!security::JwtUtil::requireAuth(req, authRes, claims)) {
+            return authRes;
+        }
+
+        // Role-based authorization: Only operator and admin can dequeue
+        if (claims.role != "operator" && claims.role != "admin") {
+            crow::json::wvalue err;
+            err["success"] = false;
+            err["message"] = "Access forbidden: Only operators and admins can manually dequeue charging requests";
+            return crow::response(403, err);
+        }
+
         crow::json::wvalue res;
         if (chargingQueue.isEmpty()) {
             res["success"] = false;
@@ -99,6 +172,12 @@ void registerDSARoutes(crow::App<crow::CORSHandler>& app,
         }
 
         std::string vehicleId = chargingQueue.dequeue();
+
+        // Trigger automatic bay allocation if stationService is available
+        if (stationService != nullptr) {
+            stationService->processQueueForAvailableStations(&chargingQueue);
+        }
+
         res["success"] = true;
         res["message"] = "Dequeued vehicle " + vehicleId + " from FRONT";
         res["evId"] = vehicleId;

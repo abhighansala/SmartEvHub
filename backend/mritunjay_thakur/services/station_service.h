@@ -44,16 +44,18 @@ public:
     bool getStationById(const std::string& id, ChargingStation& outStation);
 
     // Update station operational status ("available", "charging", "maintenance", "offline")
-    bool updateStationStatus(const std::string& id, const std::string& newStatus);
+    bool updateStationStatus(const std::string& id, const std::string& newStatus, ChargingQueue* queue = nullptr);
 
     // Assign an EV to a station and mark it as "charging"
     bool assignVehicle(const std::string& stationId, const std::string& vehicleId);
 
     // Release station when charging completes, marks as "available"
-    bool releaseStation(const std::string& stationId);
+    bool releaseStation(const std::string& stationId, ChargingQueue* queue = nullptr);
 
-    // Find the first available station (returns true if found)
-    bool findAvailableStation(ChargingStation& outStation);
+    // Find the first available station matching criteria (returns true if found)
+    bool findAvailableStation(ChargingStation& outStation,
+                              const std::string& preferredStationId = "",
+                              const std::string& requiredConnectorType = "CCS2");
 
     // Add new station to local array
     bool addStation(const ChargingStation& station);
@@ -66,8 +68,9 @@ public:
     bool getRequestById(const std::string& id, ChargingRequest& outRequest);
 
     // Validates and processes a customer charging request:
-    // If a bay is free -> immediately allocates bay, creates active session, updates station & EV to 'charging'.
-    // If all stations busy -> creates queued request, updates EV to 'waiting', enqueues into ChargingQueue.
+    // 1. Validates ownership and EV status.
+    // 2. Persists request as 'queued' and enqueues in FIFO ChargingQueue.
+    // 3. Automatically triggers queue processing for available compatible bays.
     bool createChargingRequest(int userId,
                                const std::string& evId,
                                const std::string& stationId,
@@ -75,7 +78,26 @@ public:
                                ChargingRequest& outRequest,
                                ChargingSession& outSession,
                                bool& outAllocated,
+                               ChargingQueue* queue = nullptr,
+                               const std::string& connectorType = "CCS2");
+
+    // Process queued requests in strict FIFO order for available compatible operational stations
+    int processQueueForAvailableStations(ChargingQueue* queue = nullptr);
+
+    // Cancel a customer charging request
+    bool cancelChargingRequest(const std::string& requestId,
+                               int callerUserId,
+                               const std::string& callerRole,
                                ChargingQueue* queue = nullptr);
+
+    // Manually allocate bay (restricted to operator/admin)
+    bool allocateBayManually(const std::string& requestId,
+                            const std::string& stationId,
+                            ChargingRequest& outRequest,
+                            ChargingSession& outSession,
+                            ChargingQueue* queue,
+                            int callerUserId,
+                            const std::string& callerRole);
 
     // ─── Charging Session Management ───────────────────────────────────
     // Get charging sessions with optional filtering by status ("active", "completed", or "") and userId
@@ -107,7 +129,7 @@ public:
                             double& currentCost,
                             int& elapsedSeconds);
 
-    // Complete active charging session on station/session, record transaction, and optionally dispatch next waiting EV from queue
+    // Complete active charging session on station/session, record transaction, and automatically dispatch next waiting EV from queue
     bool completeChargingSession(const std::string& stationOrSessionId,
                                  ChargingSession& outCompletedSession,
                                  Transaction& outTxn,

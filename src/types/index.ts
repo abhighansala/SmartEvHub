@@ -21,6 +21,7 @@ export interface EV {
   status: EVStatus;
   lastActivity: string;     // ISO date string
   registeredAt: string;     // ISO date string
+  userId?: number;
 }
 
 // ─── Station Types ───────────────────────────────────────────────────────────
@@ -114,6 +115,8 @@ export interface ChargingRequest {
   stationId?: string;
   bayId?: string;
   targetCharge?: number;
+  connectorType?: string;
+  queuePosition?: number;
   status?: 'queued' | 'allocated' | 'active' | 'completed' | 'cancelled' | 'failed';
   createdAt?: string;
 }

@@ -23,8 +23,8 @@ StationService::StationService(Database* database) {
     sessionArray[1] = ChargingSession("SES-1000", "EV-103", "Hyundai Ioniq 5", "CS-2", 20.0, 80.0, "2026-10-19 08:30:00", "2026-10-19 09:30:00", 80.0, 43.5, 870.0, "completed", 11, "", "Bay A-2");
     sessionCount = 2;
 
-    requestArray[0] = ChargingRequest("REQ-1001", 9, "EV-101", "CS-1", "Bay A-1", 90.0, "active", "2026-10-19 09:55:00");
-    requestArray[1] = ChargingRequest("REQ-1002", 10, "EV-102", "CS-2", "Bay A-2", 85.0, "queued", "2026-10-19 10:05:00");
+    requestArray[0] = ChargingRequest("REQ-1001", 9, "EV-101", "CS-1", "Bay A-1", 90.0, "active", "2026-10-19 09:55:00", "CCS2");
+    requestArray[1] = ChargingRequest("REQ-1002", 10, "EV-102", "CS-2", "Bay A-2", 85.0, "queued", "2026-10-19 10:05:00", "CCS2");
     requestCount = 2;
 
     // Auto-migrate SQLite schema if open
@@ -35,7 +35,7 @@ void StationService::ensureSchemaMigrations() {
     if (db == nullptr || !db->isOpen()) return;
     sqlite3* handle = db->getDbHandle();
 
-    // 1. Ensure ChargingRequest table exists
+    // 1. Ensure ChargingRequest table exists with connector_type
     std::string reqTableSql = 
         "CREATE TABLE IF NOT EXISTS ChargingRequest ("
         "id TEXT PRIMARY KEY, "
@@ -44,6 +44,7 @@ void StationService::ensureSchemaMigrations() {
         "station_id TEXT DEFAULT NULL, "
         "bay_id TEXT DEFAULT NULL, "
         "target_charge REAL NOT NULL DEFAULT 85.0, "
+        "connector_type TEXT NOT NULL DEFAULT 'CCS2' CHECK(connector_type IN ('Type 2', 'CCS2', 'CHAdeMO', 'GB/T')), "
         "status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued', 'allocated', 'active', 'completed', 'cancelled', 'failed')), "
         "created_at DATETIME DEFAULT CURRENT_TIMESTAMP, "
         "FOREIGN KEY(user_id) REFERENCES Users(id) ON DELETE CASCADE, "
@@ -51,6 +52,38 @@ void StationService::ensureSchemaMigrations() {
         "FOREIGN KEY(station_id) REFERENCES ChargingStation(id) ON DELETE SET NULL"
         ");";
     sqlite3_exec(handle, reqTableSql.c_str(), nullptr, nullptr, nullptr);
+
+    // Check ChargingRequest columns: connector_type
+    bool hasReqConnType = false;
+    sqlite3_stmt* reqStmt = nullptr;
+    if (sqlite3_prepare_v2(handle, "PRAGMA table_info(ChargingRequest);", -1, &reqStmt, nullptr) == SQLITE_OK) {
+        while (sqlite3_step(reqStmt) == SQLITE_ROW) {
+            const char* colName = (const char*)sqlite3_column_text(reqStmt, 1);
+            if (colName && std::string(colName) == "connector_type") {
+                hasReqConnType = true;
+            }
+        }
+        sqlite3_finalize(reqStmt);
+    }
+    if (!hasReqConnType) {
+        sqlite3_exec(handle, "ALTER TABLE ChargingRequest ADD COLUMN connector_type TEXT NOT NULL DEFAULT 'CCS2';", nullptr, nullptr, nullptr);
+    }
+
+    // Check EV columns: connector_type
+    bool hasEvConnType = false;
+    sqlite3_stmt* evColStmt = nullptr;
+    if (sqlite3_prepare_v2(handle, "PRAGMA table_info(EV);", -1, &evColStmt, nullptr) == SQLITE_OK) {
+        while (sqlite3_step(evColStmt) == SQLITE_ROW) {
+            const char* colName = (const char*)sqlite3_column_text(evColStmt, 1);
+            if (colName && std::string(colName) == "connector_type") {
+                hasEvConnType = true;
+            }
+        }
+        sqlite3_finalize(evColStmt);
+    }
+    if (!hasEvConnType) {
+        sqlite3_exec(handle, "ALTER TABLE EV ADD COLUMN connector_type TEXT NOT NULL DEFAULT 'CCS2';", nullptr, nullptr, nullptr);
+    }
 
     // 2. Ensure ChargingSession columns: user_id, request_id
     bool hasSesUserId = false;
@@ -119,15 +152,16 @@ int StationService::getAllStations(ChargingStation outList[], int maxCapacity) {
                 const char* locText = (const char*)sqlite3_column_text(stmt, 6);
                 const char* sesStartText = (const char*)sqlite3_column_text(stmt, 7);
 
-                std::string id = idText ? idText : "";
-                std::string name = nameText ? nameText : "";
-                std::string conn = connText ? connText : "CCS2";
-                std::string status = statusText ? statusText : "available";
-                std::string vehicleId = vehText ? vehText : "";
-                std::string location = locText ? locText : "Bay 1";
-                std::string sessionStart = sesStartText ? sesStartText : "";
-
-                outList[count] = ChargingStation(id, name, power, conn, status, vehicleId, location, sessionStart);
+                outList[count] = ChargingStation(
+                    idText ? idText : "",
+                    nameText ? nameText : "",
+                    power,
+                    connText ? connText : "CCS2",
+                    statusText ? statusText : "available",
+                    vehText ? vehText : "",
+                    locText ? locText : "Bay 1",
+                    sesStartText ? sesStartText : ""
+                );
                 count++;
             }
             sqlite3_finalize(stmt);
@@ -135,8 +169,8 @@ int StationService::getAllStations(ChargingStation outList[], int maxCapacity) {
         }
     }
 
-    // Fallback: copy from array
-    for (int i = 0; i < stationCount && i < maxCapacity; i++) {
+    // In-memory fallback
+    for (int i = 0; i < stationCount && count < maxCapacity; i++) {
         outList[i] = stationArray[i];
         count++;
     }
@@ -156,15 +190,16 @@ bool StationService::getStationById(const std::string& id, ChargingStation& outS
     return false;
 }
 
-bool StationService::updateStationStatus(const std::string& id, const std::string& newStatus) {
+bool StationService::updateStationStatus(const std::string& id, const std::string& newStatus, ChargingQueue* queue) {
     bool dbUpdated = false;
     if (db != nullptr && db->isOpen()) {
         sqlite3* handle = db->getDbHandle();
-        std::string sql = "UPDATE ChargingStation SET status = ? WHERE id = ?;";
+        std::string sql = "UPDATE ChargingStation SET status = ?, available_ports = (CASE WHEN ? = 'available' THEN 1 ELSE 0 END) WHERE id = ?;";
         sqlite3_stmt* stmt = nullptr;
         if (sqlite3_prepare_v2(handle, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
             sqlite3_bind_text(stmt, 1, newStatus.c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_text(stmt, 2, id.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 2, newStatus.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 3, id.c_str(), -1, SQLITE_STATIC);
             int rc = sqlite3_step(stmt);
             sqlite3_finalize(stmt);
             if (rc == SQLITE_DONE && sqlite3_changes(handle) > 0) {
@@ -178,11 +213,16 @@ bool StationService::updateStationStatus(const std::string& id, const std::strin
             stationArray[i].setStatus(newStatus);
             if (newStatus == "available") {
                 stationArray[i].setCurrentVehicleId("");
-                stationArray[i].setSessionStart("");
             }
-            return true;
+            dbUpdated = true;
+            break;
         }
     }
+
+    if (newStatus == "available" && queue != nullptr) {
+        processQueueForAvailableStations(queue);
+    }
+
     return dbUpdated;
 }
 
@@ -191,7 +231,7 @@ bool StationService::assignVehicle(const std::string& stationId, const std::stri
     if (db != nullptr && db->isOpen()) {
         sqlite3* handle = db->getDbHandle();
         std::string sql = "UPDATE ChargingStation SET status = 'charging', current_vehicle_id = ?, "
-                          "session_start = datetime('now'), available_ports = 0 WHERE id = ?;";
+                          "session_start = datetime('now'), available_ports = 0 WHERE id = ? AND status = 'available';";
         sqlite3_stmt* stmt = nullptr;
         if (sqlite3_prepare_v2(handle, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
             sqlite3_bind_text(stmt, 1, vehicleId.c_str(), -1, SQLITE_STATIC);
@@ -215,7 +255,7 @@ bool StationService::assignVehicle(const std::string& stationId, const std::stri
     return dbUpdated;
 }
 
-bool StationService::releaseStation(const std::string& stationId) {
+bool StationService::releaseStation(const std::string& stationId, ChargingQueue* queue) {
     bool dbUpdated = false;
     if (db != nullptr && db->isOpen()) {
         sqlite3* handle = db->getDbHandle();
@@ -237,17 +277,38 @@ bool StationService::releaseStation(const std::string& stationId) {
             stationArray[i].setStatus("available");
             stationArray[i].setCurrentVehicleId("");
             stationArray[i].setSessionStart("");
-            return true;
+            dbUpdated = true;
+            break;
         }
     }
+
+    if (queue != nullptr) {
+        processQueueForAvailableStations(queue);
+    }
+
     return dbUpdated;
 }
 
-bool StationService::findAvailableStation(ChargingStation& outStation) {
+bool StationService::findAvailableStation(ChargingStation& outStation,
+                                         const std::string& preferredStationId,
+                                         const std::string& requiredConnectorType) {
+    if (!preferredStationId.empty() && preferredStationId != "any" && preferredStationId != "ANY") {
+        if (getStationById(preferredStationId, outStation)) {
+            if (outStation.getStatus() == "available" &&
+                outStation.getCurrentVehicleId().empty() &&
+                (requiredConnectorType.empty() || outStation.getConnectorType() == requiredConnectorType)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     ChargingStation all[MAX_STATIONS];
     int count = getAllStations(all, MAX_STATIONS);
     for (int i = 0; i < count; i++) {
-        if (all[i].isAvailable()) {
+        if (all[i].getStatus() == "available" &&
+            all[i].getCurrentVehicleId().empty() &&
+            (requiredConnectorType.empty() || all[i].getConnectorType() == requiredConnectorType)) {
             outStation = all[i];
             return true;
         }
@@ -268,10 +329,10 @@ int StationService::getAllRequests(ChargingRequest outList[], int maxCapacity, i
         sqlite3* handle = db->getDbHandle();
         std::string sql;
         if (userId > 0) {
-            sql = "SELECT id, user_id, vehicle_id, station_id, bay_id, target_charge, status, created_at "
+            sql = "SELECT id, user_id, vehicle_id, station_id, bay_id, target_charge, status, created_at, connector_type "
                   "FROM ChargingRequest WHERE user_id = ? ORDER BY created_at DESC;";
         } else {
-            sql = "SELECT id, user_id, vehicle_id, station_id, bay_id, target_charge, status, created_at "
+            sql = "SELECT id, user_id, vehicle_id, station_id, bay_id, target_charge, status, created_at, connector_type "
                   "FROM ChargingRequest ORDER BY created_at DESC;";
         }
 
@@ -289,11 +350,13 @@ int StationService::getAllRequests(ChargingRequest outList[], int maxCapacity, i
                 double target = sqlite3_column_double(stmt, 5);
                 const char* stat = (const char*)sqlite3_column_text(stmt, 6);
                 const char* created = (const char*)sqlite3_column_text(stmt, 7);
+                const char* conn = (const char*)sqlite3_column_text(stmt, 8);
 
                 outList[count++] = ChargingRequest(rId ? rId : "", uId, vId ? vId : "",
                                                    sId ? sId : "", bId ? bId : "",
                                                    target, stat ? stat : "queued",
-                                                   created ? created : "");
+                                                   created ? created : "",
+                                                   conn ? conn : "CCS2");
             }
             sqlite3_finalize(stmt);
             return count;
@@ -312,7 +375,7 @@ int StationService::getAllRequests(ChargingRequest outList[], int maxCapacity, i
 bool StationService::getRequestById(const std::string& id, ChargingRequest& outRequest) {
     if (db != nullptr && db->isOpen()) {
         sqlite3* handle = db->getDbHandle();
-        std::string sql = "SELECT id, user_id, vehicle_id, station_id, bay_id, target_charge, status, created_at "
+        std::string sql = "SELECT id, user_id, vehicle_id, station_id, bay_id, target_charge, status, created_at, connector_type "
                           "FROM ChargingRequest WHERE id = ? LIMIT 1;";
         sqlite3_stmt* stmt = nullptr;
         if (sqlite3_prepare_v2(handle, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
@@ -326,11 +389,13 @@ bool StationService::getRequestById(const std::string& id, ChargingRequest& outR
                 double target = sqlite3_column_double(stmt, 5);
                 const char* stat = (const char*)sqlite3_column_text(stmt, 6);
                 const char* created = (const char*)sqlite3_column_text(stmt, 7);
+                const char* conn = (const char*)sqlite3_column_text(stmt, 8);
 
                 outRequest = ChargingRequest(rId ? rId : "", uId, vId ? vId : "",
                                              sId ? sId : "", bId ? bId : "",
                                              target, stat ? stat : "queued",
-                                             created ? created : "");
+                                             created ? created : "",
+                                             conn ? conn : "CCS2");
                 sqlite3_finalize(stmt);
                 return true;
             }
@@ -347,6 +412,339 @@ bool StationService::getRequestById(const std::string& id, ChargingRequest& outR
     return false;
 }
 
+int StationService::processQueueForAvailableStations(ChargingQueue* queue) {
+    if (queue != nullptr && queue->isEmpty()) {
+        return 0;
+    }
+    if (db == nullptr || !db->isOpen()) {
+        return 0;
+    }
+    sqlite3* handle = db->getDbHandle();
+
+    // 1. Fetch all operational available stations
+    ChargingStation availStations[MAX_STATIONS];
+    int availCount = 0;
+    std::string stSql = "SELECT id, name, power, connector_type, status, current_vehicle_id, location, session_start "
+                        "FROM ChargingStation WHERE status = 'available' AND (current_vehicle_id IS NULL OR current_vehicle_id = '') "
+                        "AND available_ports > 0 ORDER BY id ASC;";
+    sqlite3_stmt* stStmt = nullptr;
+    if (sqlite3_prepare_v2(handle, stSql.c_str(), -1, &stStmt, nullptr) == SQLITE_OK) {
+        while (sqlite3_step(stStmt) == SQLITE_ROW && availCount < MAX_STATIONS) {
+            const char* idText = (const char*)sqlite3_column_text(stStmt, 0);
+            const char* nameText = (const char*)sqlite3_column_text(stStmt, 1);
+            double power = sqlite3_column_double(stStmt, 2);
+            const char* connText = (const char*)sqlite3_column_text(stStmt, 3);
+            const char* statusText = (const char*)sqlite3_column_text(stStmt, 4);
+            const char* vehText = (const char*)sqlite3_column_text(stStmt, 5);
+            const char* locText = (const char*)sqlite3_column_text(stStmt, 6);
+            const char* sesStartText = (const char*)sqlite3_column_text(stStmt, 7);
+
+            availStations[availCount++] = ChargingStation(
+                idText ? idText : "",
+                nameText ? nameText : "",
+                power,
+                connText ? connText : "CCS2",
+                statusText ? statusText : "available",
+                vehText ? vehText : "",
+                locText ? locText : "Bay 1",
+                sesStartText ? sesStartText : ""
+            );
+        }
+        sqlite3_finalize(stStmt);
+    }
+
+    if (availCount == 0) {
+        return 0; // No available operational stations
+    }
+
+    // 2. Fetch queued requests in strict FIFO order
+    ChargingRequest queuedReqs[MAX_REQUESTS];
+    int queuedCount = 0;
+
+    if (queue != nullptr) {
+        std::string qVehicles[CHARGING_QUEUE_CAPACITY];
+        int qvCount = queue->getItems(qVehicles, CHARGING_QUEUE_CAPACITY);
+        for (int v = 0; v < qvCount && queuedCount < MAX_REQUESTS; v++) {
+            std::string qvId = qVehicles[v];
+            std::string rSql = "SELECT id, user_id, vehicle_id, station_id, bay_id, target_charge, status, created_at, connector_type "
+                               "FROM ChargingRequest WHERE vehicle_id = ? AND status = 'queued' ORDER BY created_at ASC LIMIT 1;";
+            sqlite3_stmt* rStmt = nullptr;
+            bool foundReq = false;
+            if (sqlite3_prepare_v2(handle, rSql.c_str(), -1, &rStmt, nullptr) == SQLITE_OK) {
+                sqlite3_bind_text(rStmt, 1, qvId.c_str(), -1, SQLITE_STATIC);
+                if (sqlite3_step(rStmt) == SQLITE_ROW) {
+                    foundReq = true;
+                    const char* rId = (const char*)sqlite3_column_text(rStmt, 0);
+                    int uId = sqlite3_column_int(rStmt, 1);
+                    const char* vId = (const char*)sqlite3_column_text(rStmt, 2);
+                    const char* sId = (const char*)sqlite3_column_text(rStmt, 3);
+                    const char* bId = (const char*)sqlite3_column_text(rStmt, 4);
+                    double target = sqlite3_column_double(rStmt, 5);
+                    const char* stat = (const char*)sqlite3_column_text(rStmt, 6);
+                    const char* created = (const char*)sqlite3_column_text(rStmt, 7);
+                    const char* conn = (const char*)sqlite3_column_text(rStmt, 8);
+
+                    queuedReqs[queuedCount++] = ChargingRequest(
+                        rId ? rId : "",
+                        uId,
+                        vId ? vId : "",
+                        sId ? sId : "",
+                        bId ? bId : "",
+                        target,
+                        stat ? stat : "queued",
+                        created ? created : "",
+                        conn ? conn : "CCS2"
+                    );
+                }
+                sqlite3_finalize(rStmt);
+            }
+
+            if (!foundReq && queuedCount < MAX_REQUESTS) {
+                std::string evSql = "SELECT user_id, current_charge, model FROM EV WHERE id = ?;";
+                sqlite3_stmt* evStmt = nullptr;
+                if (sqlite3_prepare_v2(handle, evSql.c_str(), -1, &evStmt, nullptr) == SQLITE_OK) {
+                    sqlite3_bind_text(evStmt, 1, qvId.c_str(), -1, SQLITE_STATIC);
+                    if (sqlite3_step(evStmt) == SQLITE_ROW) {
+                        int uId = sqlite3_column_int(evStmt, 0);
+                        static int autoReqCounter = 9000;
+                        std::string autoReqId = "REQ-A-" + std::to_string(autoReqCounter++) + "-" + std::to_string(time(nullptr) % 10000);
+
+                        std::string insSql = "INSERT INTO ChargingRequest (id, user_id, vehicle_id, station_id, bay_id, target_charge, connector_type, status, created_at) "
+                                             "VALUES (?, ?, ?, NULL, 'Queue Waiting', 85.0, 'CCS2', 'queued', datetime('now'));";
+                        sqlite3_stmt* insStmt = nullptr;
+                        if (sqlite3_prepare_v2(handle, insSql.c_str(), -1, &insStmt, nullptr) == SQLITE_OK) {
+                            sqlite3_bind_text(insStmt, 1, autoReqId.c_str(), -1, SQLITE_STATIC);
+                            sqlite3_bind_int(insStmt, 2, uId);
+                            sqlite3_bind_text(insStmt, 3, qvId.c_str(), -1, SQLITE_STATIC);
+                            sqlite3_step(insStmt);
+                            sqlite3_finalize(insStmt);
+                        }
+
+                        queuedReqs[queuedCount++] = ChargingRequest(
+                            autoReqId,
+                            uId,
+                            qvId,
+                            "",
+                            "Queue Waiting",
+                            85.0,
+                            "queued",
+                            "",
+                            "CCS2"
+                        );
+                    }
+                    sqlite3_finalize(evStmt);
+                }
+            }
+        }
+    } else {
+        std::string reqSql = "SELECT id, user_id, vehicle_id, station_id, bay_id, target_charge, status, created_at, connector_type "
+                             "FROM ChargingRequest WHERE status = 'queued' ORDER BY created_at ASC, rowid ASC;";
+        sqlite3_stmt* reqStmt = nullptr;
+        if (sqlite3_prepare_v2(handle, reqSql.c_str(), -1, &reqStmt, nullptr) == SQLITE_OK) {
+            while (sqlite3_step(reqStmt) == SQLITE_ROW && queuedCount < MAX_REQUESTS) {
+                const char* rId = (const char*)sqlite3_column_text(reqStmt, 0);
+                int uId = sqlite3_column_int(reqStmt, 1);
+                const char* vId = (const char*)sqlite3_column_text(reqStmt, 2);
+                const char* sId = (const char*)sqlite3_column_text(reqStmt, 3);
+                const char* bId = (const char*)sqlite3_column_text(reqStmt, 4);
+                double target = sqlite3_column_double(reqStmt, 5);
+                const char* stat = (const char*)sqlite3_column_text(reqStmt, 6);
+                const char* created = (const char*)sqlite3_column_text(reqStmt, 7);
+                const char* conn = (const char*)sqlite3_column_text(reqStmt, 8);
+
+                queuedReqs[queuedCount++] = ChargingRequest(
+                    rId ? rId : "",
+                    uId,
+                    vId ? vId : "",
+                    sId ? sId : "",
+                    bId ? bId : "",
+                    target,
+                    stat ? stat : "queued",
+                    created ? created : "",
+                    conn ? conn : "CCS2"
+                );
+            }
+            sqlite3_finalize(reqStmt);
+        }
+    }
+
+    if (queuedCount == 0) {
+        return 0; // No waiting requests
+    }
+
+    int processedCount = 0;
+    bool stationClaimed[MAX_STATIONS] = { false };
+
+    // 3. Match queued requests with compatible available stations
+    for (int q = 0; q < queuedCount; q++) {
+        std::string reqId = queuedReqs[q].getId();
+        std::string evId = queuedReqs[q].getVehicleId();
+        int reqUserId = queuedReqs[q].getUserId();
+        double targetCharge = queuedReqs[q].getTargetCharge();
+        std::string prefStationId = queuedReqs[q].getStationId();
+        std::string reqConnector = queuedReqs[q].getConnectorType();
+        if (reqConnector.empty()) reqConnector = "CCS2";
+
+        int matchIdx = -1;
+        // First try to match preferred station if specified and compatible
+        if (!prefStationId.empty() && prefStationId != "any" && prefStationId != "ANY") {
+            for (int s = 0; s < availCount; s++) {
+                if (stationClaimed[s]) continue;
+                if (availStations[s].getStatus() != "available") continue;
+                if (!reqConnector.empty() && availStations[s].getConnectorType() != reqConnector) {
+                    continue;
+                }
+                if (availStations[s].getId() == prefStationId) {
+                    matchIdx = s;
+                    break;
+                }
+            }
+        }
+
+        // If no preferred station matched, match any available compatible station
+        if (matchIdx == -1) {
+            for (int s = 0; s < availCount; s++) {
+                if (stationClaimed[s]) continue;
+                if (availStations[s].getStatus() != "available") continue;
+                if (!reqConnector.empty() && availStations[s].getConnectorType() != reqConnector) {
+                    continue;
+                }
+                matchIdx = s;
+                break;
+            }
+        }
+
+        if (matchIdx == -1) {
+            // No compatible bay found for this request
+            continue;
+        }
+
+        ChargingStation chosenStation = availStations[matchIdx];
+
+        // Fetch EV data
+        std::string evSql = "SELECT model, battery_capacity, current_charge, user_id FROM EV WHERE id = ?;";
+        sqlite3_stmt* evStmt = nullptr;
+        std::string evModel = "Electric Vehicle";
+        double capacity = 50.0;
+        double currentCharge = 20.0;
+        int evOwnerId = reqUserId;
+
+        if (sqlite3_prepare_v2(handle, evSql.c_str(), -1, &evStmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(evStmt, 1, evId.c_str(), -1, SQLITE_STATIC);
+            if (sqlite3_step(evStmt) == SQLITE_ROW) {
+                const char* mTxt = (const char*)sqlite3_column_text(evStmt, 0);
+                if (mTxt) evModel = mTxt;
+                capacity = sqlite3_column_double(evStmt, 1);
+                currentCharge = sqlite3_column_double(evStmt, 2);
+                int oId = sqlite3_column_int(evStmt, 3);
+                if (oId > 0) evOwnerId = oId;
+            }
+            sqlite3_finalize(evStmt);
+        }
+
+        if (targetCharge <= currentCharge) {
+            targetCharge = std::min(100.0, currentCharge + 20.0);
+        }
+        double energyEst = ((targetCharge - currentCharge) / 100.0) * capacity;
+        double costEst = Transaction::calculateTariff(energyEst, "charging");
+
+        std::string sesId = "SES-" + std::to_string(s_sessionCounter++) + "-" + std::to_string(time(nullptr) % 10000);
+
+        // 4. Atomic Multi-record SQLite Transaction
+        if (!db->beginTransaction()) {
+            continue;
+        }
+
+        // A. Lock ChargingStation atomically
+        std::string updStSql = "UPDATE ChargingStation SET status = 'charging', current_vehicle_id = ?, "
+                               "session_start = datetime('now'), available_ports = 0 WHERE id = ? AND status = 'available' "
+                               "AND (current_vehicle_id IS NULL OR current_vehicle_id = '');";
+        sqlite3_stmt* updStStmt = nullptr;
+        if (sqlite3_prepare_v2(handle, updStSql.c_str(), -1, &updStStmt, nullptr) != SQLITE_OK) {
+            db->rollbackTransaction();
+            continue;
+        }
+        sqlite3_bind_text(updStStmt, 1, evId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(updStStmt, 2, chosenStation.getId().c_str(), -1, SQLITE_STATIC);
+        int rc = sqlite3_step(updStStmt);
+        sqlite3_finalize(updStStmt);
+        if (rc != SQLITE_DONE || sqlite3_changes(handle) != 1) {
+            // Concurrent race condition or bay occupied
+            db->rollbackTransaction();
+            continue;
+        }
+
+        // B. Update ChargingRequest atomically: queued -> allocated
+        std::string updReqSql = "UPDATE ChargingRequest SET status = 'allocated', station_id = ?, bay_id = ? "
+                                "WHERE id = ? AND status = 'queued';";
+        sqlite3_stmt* updReqStmt = nullptr;
+        if (sqlite3_prepare_v2(handle, updReqSql.c_str(), -1, &updReqStmt, nullptr) != SQLITE_OK) {
+            db->rollbackTransaction();
+            continue;
+        }
+        sqlite3_bind_text(updReqStmt, 1, chosenStation.getId().c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(updReqStmt, 2, chosenStation.getLocation().c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(updReqStmt, 3, reqId.c_str(), -1, SQLITE_STATIC);
+        rc = sqlite3_step(updReqStmt);
+        sqlite3_finalize(updReqStmt);
+        if (rc != SQLITE_DONE || sqlite3_changes(handle) != 1) {
+            // Request was already allocated or cancelled concurrently
+            db->rollbackTransaction();
+            continue;
+        }
+
+        // C. Update EV status to charging
+        std::string updEvSql = "UPDATE EV SET status = 'charging', last_activity = datetime('now') WHERE id = ?;";
+        sqlite3_stmt* updEvStmt = nullptr;
+        if (sqlite3_prepare_v2(handle, updEvSql.c_str(), -1, &updEvStmt, nullptr) != SQLITE_OK) {
+            db->rollbackTransaction();
+            continue;
+        }
+        sqlite3_bind_text(updEvStmt, 1, evId.c_str(), -1, SQLITE_STATIC);
+        rc = sqlite3_step(updEvStmt);
+        sqlite3_finalize(updEvStmt);
+        if (rc != SQLITE_DONE) {
+            db->rollbackTransaction();
+            continue;
+        }
+
+        // D. Insert ChargingSession (status = 'active')
+        std::string insSesSql = "INSERT INTO ChargingSession (id, vehicle_id, ev_model, station_id, start_time, end_time, "
+                                "battery_start, battery_end, target_charge, energy_consumed, estimated_cost, status, user_id, request_id) "
+                                "VALUES (?, ?, ?, ?, datetime('now'), NULL, ?, NULL, ?, 0.0, ?, 'active', ?, ?);";
+        sqlite3_stmt* insSesStmt = nullptr;
+        if (sqlite3_prepare_v2(handle, insSesSql.c_str(), -1, &insSesStmt, nullptr) != SQLITE_OK) {
+            db->rollbackTransaction();
+            continue;
+        }
+        sqlite3_bind_text(insSesStmt, 1, sesId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(insSesStmt, 2, evId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(insSesStmt, 3, evModel.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(insSesStmt, 4, chosenStation.getId().c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_double(insSesStmt, 5, currentCharge);
+        sqlite3_bind_double(insSesStmt, 6, targetCharge);
+        sqlite3_bind_double(insSesStmt, 7, costEst);
+        sqlite3_bind_int(insSesStmt, 8, evOwnerId);
+        sqlite3_bind_text(insSesStmt, 9, reqId.c_str(), -1, SQLITE_STATIC);
+        rc = sqlite3_step(insSesStmt);
+        sqlite3_finalize(insSesStmt);
+        if (rc != SQLITE_DONE) {
+            db->rollbackTransaction();
+            continue;
+        }
+
+        db->commitTransaction();
+
+        stationClaimed[matchIdx] = true;
+        if (queue != nullptr) {
+            queue->remove(evId);
+        }
+        processedCount++;
+    }
+
+    return processedCount;
+}
+
 bool StationService::createChargingRequest(int userId,
                                           const std::string& evId,
                                           const std::string& stationId,
@@ -354,20 +752,22 @@ bool StationService::createChargingRequest(int userId,
                                           ChargingRequest& outRequest,
                                           ChargingSession& outSession,
                                           bool& outAllocated,
-                                          ChargingQueue* queue) {
+                                          ChargingQueue* queue,
+                                          const std::string& connectorType) {
     outAllocated = false;
 
     if (db != nullptr && db->isOpen()) {
         sqlite3* handle = db->getDbHandle();
 
         // 1. Validate EV in DB
-        std::string evSql = "SELECT model, battery_capacity, current_charge, status, user_id FROM EV WHERE id = ?;";
+        std::string evSql = "SELECT model, battery_capacity, current_charge, status, user_id, connector_type FROM EV WHERE id = ?;";
         sqlite3_stmt* evStmt = nullptr;
         std::string evModel = "EV";
         double capacity = 50.0;
         double currentCharge = 20.0;
         std::string evStatus = "";
         int evOwnerId = 0;
+        std::string evConn = "CCS2";
 
         if (sqlite3_prepare_v2(handle, evSql.c_str(), -1, &evStmt, nullptr) != SQLITE_OK) {
             return false;
@@ -381,25 +781,24 @@ bool StationService::createChargingRequest(int userId,
             const char* sTxt = (const char*)sqlite3_column_text(evStmt, 3);
             evStatus = sTxt ? sTxt : "";
             evOwnerId = sqlite3_column_int(evStmt, 4);
+            const char* cTxt = (const char*)sqlite3_column_text(evStmt, 5);
+            if (cTxt) evConn = cTxt;
         } else {
             sqlite3_finalize(evStmt);
             return false; // EV not found
         }
         sqlite3_finalize(evStmt);
 
-        // Security / Ownership check (Phase 14)
+        // Security / Ownership check: Authenticated User must own the EV
         if (userId > 0 && evOwnerId > 0 && evOwnerId != userId) {
-            
             return false;
         }
 
         if (evStatus == "charging" || evStatus == "swapping") {
-            
             return false;
         }
 
         if (queue != nullptr && queue->contains(evId)) {
-            
             return false;
         }
 
@@ -407,185 +806,306 @@ bool StationService::createChargingRequest(int userId,
             targetCharge = 85.0;
         }
         if (targetCharge <= currentCharge) {
-            
             return false;
         }
 
-        // 2. Station selection and availability
-        ChargingStation chosenStation;
-        bool hasSpecificStation = (!stationId.empty() && stationId != "any" && stationId != "ANY");
-        bool stationFound = false;
+        if (queue != nullptr && queue->isFull()) {
+            return false; // Queue capacity overflow
+        }
 
+        std::string finalConn = connectorType.empty() ? evConn : connectorType;
+        if (finalConn.empty()) finalConn = "CCS2";
+
+        bool hasSpecificStation = (!stationId.empty() && stationId != "any" && stationId != "ANY");
         if (hasSpecificStation) {
-            if (getStationById(stationId, chosenStation)) {
-                if (chosenStation.isAvailable()) {
-                    stationFound = true;
-                }
-            } else {
-                return false; // Specific station does not exist
+            ChargingStation specStation;
+            if (!getStationById(stationId, specStation)) {
+                return false;
             }
-        } else {
-            stationFound = findAvailableStation(chosenStation);
         }
 
         std::string reqId = "REQ-" + std::to_string(s_requestCounter++) + "-" + std::to_string(time(nullptr) % 10000);
 
-        // 3. If station available -> ALLOCATE BAY & START ACTIVE SESSION
-        if (stationFound) {
-            std::string sesId = "SES-" + std::to_string(s_sessionCounter++) + "-" + std::to_string(time(nullptr) % 10000);
-            double energyEst = ((targetCharge - currentCharge) / 100.0) * capacity;
-            double costEst = Transaction::calculateTariff(energyEst, "charging");
+        // Insert ChargingRequest as 'queued' and update EV to 'waiting'
+        if (!db->beginTransaction()) return false;
 
-            if (!db->beginTransaction()) return false;
-
-            // A. Insert ChargingRequest as 'allocated'
-            std::string insReqSql = "INSERT INTO ChargingRequest (id, user_id, vehicle_id, station_id, bay_id, target_charge, status, created_at) "
-                                    "VALUES (?, ?, ?, ?, ?, ?, 'allocated', datetime('now'));";
-            sqlite3_stmt* insReqStmt = nullptr;
-            if (sqlite3_prepare_v2(handle, insReqSql.c_str(), -1, &insReqStmt, nullptr) != SQLITE_OK) {
-                db->rollbackTransaction();
-                return false;
-            }
-            sqlite3_bind_text(insReqStmt, 1, reqId.c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_int(insReqStmt, 2, (userId > 0) ? userId : evOwnerId);
-            sqlite3_bind_text(insReqStmt, 3, evId.c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_text(insReqStmt, 4, chosenStation.getId().c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_text(insReqStmt, 5, chosenStation.getLocation().c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_double(insReqStmt, 6, targetCharge);
-            int rc = sqlite3_step(insReqStmt);
-            sqlite3_finalize(insReqStmt);
-            if (rc != SQLITE_DONE) {
-                db->rollbackTransaction();
-                return false;
-            }
-
-            // B. Insert ChargingSession as 'active'
-            std::string insSesSql = "INSERT INTO ChargingSession (id, vehicle_id, ev_model, station_id, start_time, end_time, "
-                                    "battery_start, battery_end, target_charge, energy_consumed, estimated_cost, status, user_id, request_id) "
-                                    "VALUES (?, ?, ?, ?, datetime('now'), NULL, ?, NULL, ?, 0.0, ?, 'active', ?, ?);";
-            sqlite3_stmt* insSesStmt = nullptr;
-            if (sqlite3_prepare_v2(handle, insSesSql.c_str(), -1, &insSesStmt, nullptr) != SQLITE_OK) {
-                db->rollbackTransaction();
-                return false;
-            }
-            sqlite3_bind_text(insSesStmt, 1, sesId.c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_text(insSesStmt, 2, evId.c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_text(insSesStmt, 3, evModel.c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_text(insSesStmt, 4, chosenStation.getId().c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_double(insSesStmt, 5, currentCharge);
-            sqlite3_bind_double(insSesStmt, 6, targetCharge);
-            sqlite3_bind_double(insSesStmt, 7, costEst);
-            sqlite3_bind_int(insSesStmt, 8, (userId > 0) ? userId : evOwnerId);
-            sqlite3_bind_text(insSesStmt, 9, reqId.c_str(), -1, SQLITE_STATIC);
-            rc = sqlite3_step(insSesStmt);
-            sqlite3_finalize(insSesStmt);
-            if (rc != SQLITE_DONE) {
-                db->rollbackTransaction();
-                return false;
-            }
-
-            // C. Update ChargingStation
-            std::string updStSql = "UPDATE ChargingStation SET status = 'charging', current_vehicle_id = ?, "
-                                   "session_start = datetime('now'), available_ports = 0 WHERE id = ?;";
-            sqlite3_stmt* updStStmt = nullptr;
-            if (sqlite3_prepare_v2(handle, updStSql.c_str(), -1, &updStStmt, nullptr) != SQLITE_OK) {
-                db->rollbackTransaction();
-                return false;
-            }
-            sqlite3_bind_text(updStStmt, 1, evId.c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_text(updStStmt, 2, chosenStation.getId().c_str(), -1, SQLITE_STATIC);
-            rc = sqlite3_step(updStStmt);
-            sqlite3_finalize(updStStmt);
-            if (rc != SQLITE_DONE || sqlite3_changes(handle) != 1) {
-                db->rollbackTransaction();
-                return false;
-            }
-
-            // D. Update EV status
-            std::string updEvSql = "UPDATE EV SET status = 'charging', last_activity = datetime('now') WHERE id = ?;";
-            sqlite3_stmt* updEvStmt = nullptr;
-            if (sqlite3_prepare_v2(handle, updEvSql.c_str(), -1, &updEvStmt, nullptr) != SQLITE_OK) {
-                db->rollbackTransaction();
-                return false;
-            }
-            sqlite3_bind_text(updEvStmt, 1, evId.c_str(), -1, SQLITE_STATIC);
-            rc = sqlite3_step(updEvStmt);
-            sqlite3_finalize(updEvStmt);
-            if (rc != SQLITE_DONE || sqlite3_changes(handle) != 1) {
-                db->rollbackTransaction();
-                return false;
-            }
-
-            db->commitTransaction();
-
-            outAllocated = true;
-            outRequest = ChargingRequest(reqId, (userId > 0) ? userId : evOwnerId, evId, chosenStation.getId(), chosenStation.getLocation(), targetCharge, "allocated", "");
-            outSession = ChargingSession(sesId, evId, evModel, chosenStation.getId(), currentCharge, targetCharge, "", "", 0.0, 0.0, costEst, "active", (userId > 0) ? userId : evOwnerId, reqId, chosenStation.getLocation());
-            return true;
-        } else {
-            // 4. Stations busy -> ENQUEUE IN FIFO QUEUE
-            if (queue != nullptr && queue->isFull()) {
-                return false; // Queue capacity full
-            }
-
-            if (!db->beginTransaction()) return false;
-
-            std::string insReqSql = "INSERT INTO ChargingRequest (id, user_id, vehicle_id, station_id, bay_id, target_charge, status, created_at) "
-                                    "VALUES (?, ?, ?, ?, 'Queue Waiting', ?, 'queued', datetime('now'));";
-            sqlite3_stmt* insReqStmt = nullptr;
-            if (sqlite3_prepare_v2(handle, insReqSql.c_str(), -1, &insReqStmt, nullptr) != SQLITE_OK) {
-                db->rollbackTransaction();
-                return false;
-            }
-            sqlite3_bind_text(insReqStmt, 1, reqId.c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_int(insReqStmt, 2, (userId > 0) ? userId : evOwnerId);
-            sqlite3_bind_text(insReqStmt, 3, evId.c_str(), -1, SQLITE_STATIC);
-            if (hasSpecificStation) {
-                sqlite3_bind_text(insReqStmt, 4, stationId.c_str(), -1, SQLITE_STATIC);
-            } else {
-                sqlite3_bind_null(insReqStmt, 4);
-            }
-            sqlite3_bind_double(insReqStmt, 5, targetCharge);
-            int rc = sqlite3_step(insReqStmt);
-            sqlite3_finalize(insReqStmt);
-            if (rc != SQLITE_DONE) {
-                db->rollbackTransaction();
-                return false;
-            }
-
-            std::string updEvSql = "UPDATE EV SET status = 'waiting', last_activity = datetime('now') WHERE id = ?;";
-            sqlite3_stmt* updEvStmt = nullptr;
-            if (sqlite3_prepare_v2(handle, updEvSql.c_str(), -1, &updEvStmt, nullptr) != SQLITE_OK) {
-                db->rollbackTransaction();
-                return false;
-            }
-            sqlite3_bind_text(updEvStmt, 1, evId.c_str(), -1, SQLITE_STATIC);
-            rc = sqlite3_step(updEvStmt);
-            sqlite3_finalize(updEvStmt);
-            if (rc != SQLITE_DONE || sqlite3_changes(handle) != 1) {
-                db->rollbackTransaction();
-                return false;
-            }
-
-            db->commitTransaction();
-
-            if (queue != nullptr) {
-                queue->enqueue(evId);
-            }
-
-            outAllocated = false;
-            outRequest = ChargingRequest(reqId, (userId > 0) ? userId : evOwnerId, evId, hasSpecificStation ? stationId : "", "Queue Waiting", targetCharge, "queued", "");
-            return true;
+        std::string insReqSql = "INSERT INTO ChargingRequest (id, user_id, vehicle_id, station_id, bay_id, target_charge, connector_type, status, created_at) "
+                                "VALUES (?, ?, ?, ?, 'Queue Waiting', ?, ?, 'queued', datetime('now'));";
+        sqlite3_stmt* insReqStmt = nullptr;
+        if (sqlite3_prepare_v2(handle, insReqSql.c_str(), -1, &insReqStmt, nullptr) != SQLITE_OK) {
+            db->rollbackTransaction();
+            return false;
         }
+        sqlite3_bind_text(insReqStmt, 1, reqId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_int(insReqStmt, 2, (userId > 0) ? userId : evOwnerId);
+        sqlite3_bind_text(insReqStmt, 3, evId.c_str(), -1, SQLITE_STATIC);
+        if (hasSpecificStation) {
+            sqlite3_bind_text(insReqStmt, 4, stationId.c_str(), -1, SQLITE_STATIC);
+        } else {
+            sqlite3_bind_null(insReqStmt, 4);
+        }
+        sqlite3_bind_double(insReqStmt, 5, targetCharge);
+        sqlite3_bind_text(insReqStmt, 6, finalConn.c_str(), -1, SQLITE_STATIC);
+        int rc = sqlite3_step(insReqStmt);
+        sqlite3_finalize(insReqStmt);
+        if (rc != SQLITE_DONE) {
+            db->rollbackTransaction();
+            return false;
+        }
+
+        std::string updEvSql = "UPDATE EV SET status = 'waiting', last_activity = datetime('now') WHERE id = ?;";
+        sqlite3_stmt* updEvStmt = nullptr;
+        if (sqlite3_prepare_v2(handle, updEvSql.c_str(), -1, &updEvStmt, nullptr) != SQLITE_OK) {
+            db->rollbackTransaction();
+            return false;
+        }
+        sqlite3_bind_text(updEvStmt, 1, evId.c_str(), -1, SQLITE_STATIC);
+        rc = sqlite3_step(updEvStmt);
+        sqlite3_finalize(updEvStmt);
+        if (rc != SQLITE_DONE || sqlite3_changes(handle) != 1) {
+            db->rollbackTransaction();
+            return false;
+        }
+
+        db->commitTransaction();
+
+        if (queue != nullptr) {
+            queue->enqueue(evId);
+        }
+
+        // Automatic Queue Processing: check if a compatible bay is available
+        processQueueForAvailableStations(queue);
+
+        // Check if our request was allocated/activated
+        if (getRequestById(reqId, outRequest)) {
+            if (outRequest.getStatus() == "allocated" || outRequest.getStatus() == "active") {
+                outAllocated = true;
+                // Query active session
+                std::string getSesSql = "SELECT id, vehicle_id, ev_model, station_id, start_time, end_time, "
+                                        "battery_start, battery_end, target_charge, energy_consumed, estimated_cost, "
+                                        "status, user_id, request_id FROM ChargingSession WHERE request_id = ? LIMIT 1;";
+                sqlite3_stmt* gSesStmt = nullptr;
+                if (sqlite3_prepare_v2(handle, getSesSql.c_str(), -1, &gSesStmt, nullptr) == SQLITE_OK) {
+                    sqlite3_bind_text(gSesStmt, 1, reqId.c_str(), -1, SQLITE_STATIC);
+                    if (sqlite3_step(gSesStmt) == SQLITE_ROW) {
+                        const char* sId = (const char*)sqlite3_column_text(gSesStmt, 0);
+                        const char* vId = (const char*)sqlite3_column_text(gSesStmt, 1);
+                        const char* mTxt = (const char*)sqlite3_column_text(gSesStmt, 2);
+                        const char* stId = (const char*)sqlite3_column_text(gSesStmt, 3);
+                        const char* sTime = (const char*)sqlite3_column_text(gSesStmt, 4);
+                        const char* eTime = (const char*)sqlite3_column_text(gSesStmt, 5);
+                        double bStart = sqlite3_column_double(gSesStmt, 6);
+                        double bEnd = sqlite3_column_double(gSesStmt, 7);
+                        double tChg = sqlite3_column_double(gSesStmt, 8);
+                        double eCons = sqlite3_column_double(gSesStmt, 9);
+                        double estCost = sqlite3_column_double(gSesStmt, 10);
+                        const char* stat = (const char*)sqlite3_column_text(gSesStmt, 11);
+                        int uId = sqlite3_column_int(gSesStmt, 12);
+                        const char* rId = (const char*)sqlite3_column_text(gSesStmt, 13);
+
+                        outSession = ChargingSession(sId ? sId : "", vId ? vId : "", mTxt ? mTxt : "",
+                                                     stId ? stId : "", bStart, tChg, sTime ? sTime : "",
+                                                     eTime ? eTime : "", bEnd, eCons, estCost, stat ? stat : "active",
+                                                     uId, rId ? rId : "", outRequest.getBayId());
+                    }
+                    sqlite3_finalize(gSesStmt);
+                }
+            } else {
+                outAllocated = false;
+            }
+        } else {
+            outRequest = ChargingRequest(reqId, (userId > 0) ? userId : evOwnerId, evId, hasSpecificStation ? stationId : "", "Queue Waiting", targetCharge, "queued", "", finalConn);
+            outAllocated = false;
+        }
+
+        return true;
     }
 
     // In-memory fallback
     std::string reqId = "REQ-" + std::to_string(s_requestCounter++);
-    outRequest = ChargingRequest(reqId, userId, evId, stationId, "Bay 1", targetCharge, "allocated", "2026-10-19 10:00:00");
+    outRequest = ChargingRequest(reqId, userId, evId, stationId, "Bay 1", targetCharge, "allocated", "2026-10-19 10:00:00", connectorType);
     if (requestCount < MAX_REQUESTS) {
         requestArray[requestCount++] = outRequest;
     }
     outAllocated = true;
+    return true;
+}
+
+bool StationService::cancelChargingRequest(const std::string& requestId,
+                                          int callerUserId,
+                                          const std::string& callerRole,
+                                          ChargingQueue* queue) {
+    if (db == nullptr || !db->isOpen()) return false;
+    sqlite3* handle = db->getDbHandle();
+
+    ChargingRequest req;
+    if (!getRequestById(requestId, req)) {
+        return false;
+    }
+
+    // Role check: user can only cancel their own request
+    if (callerRole == "user" && callerUserId > 0 && req.getUserId() != callerUserId) {
+        return false;
+    }
+
+    if (req.getStatus() == "completed" || req.getStatus() == "cancelled") {
+        return false;
+    }
+
+    std::string curStatus = req.getStatus();
+    std::string vId = req.getVehicleId();
+    std::string sId = req.getStationId();
+
+    if (!db->beginTransaction()) return false;
+
+    // Update request to cancelled
+    std::string updReq = "UPDATE ChargingRequest SET status = 'cancelled' WHERE id = ?;";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(handle, updReq.c_str(), -1, &stmt, nullptr) != SQLITE_OK) {
+        db->rollbackTransaction();
+        return false;
+    }
+    sqlite3_bind_text(stmt, 1, requestId.c_str(), -1, SQLITE_STATIC);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+
+    // Update EV back to available
+    std::string updEv = "UPDATE EV SET status = 'available', last_activity = datetime('now') WHERE id = ?;";
+    sqlite3_stmt* evStmt = nullptr;
+    if (sqlite3_prepare_v2(handle, updEv.c_str(), -1, &evStmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(evStmt, 1, vId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_step(evStmt);
+        sqlite3_finalize(evStmt);
+    }
+
+    // If was allocated or active, release station
+    if (curStatus == "allocated" || curStatus == "active") {
+        if (!sId.empty()) {
+            std::string updSt = "UPDATE ChargingStation SET status = 'available', current_vehicle_id = NULL, "
+                                "session_start = NULL, available_ports = 1 WHERE id = ?;";
+            sqlite3_stmt* stStmt = nullptr;
+            if (sqlite3_prepare_v2(handle, updSt.c_str(), -1, &stStmt, nullptr) == SQLITE_OK) {
+                sqlite3_bind_text(stStmt, 1, sId.c_str(), -1, SQLITE_STATIC);
+                sqlite3_step(stStmt);
+                sqlite3_finalize(stStmt);
+            }
+        }
+        std::string updSes = "UPDATE ChargingSession SET status = 'completed', end_time = datetime('now') WHERE request_id = ? AND status = 'active';";
+        sqlite3_stmt* sesStmt = nullptr;
+        if (sqlite3_prepare_v2(handle, updSes.c_str(), -1, &sesStmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(sesStmt, 1, requestId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_step(sesStmt);
+            sqlite3_finalize(sesStmt);
+        }
+    }
+
+    db->commitTransaction();
+
+    if (queue != nullptr) {
+        queue->remove(vId);
+    }
+
+    if (curStatus == "allocated" || curStatus == "active") {
+        processQueueForAvailableStations(queue);
+    }
+
+    return true;
+}
+
+bool StationService::allocateBayManually(const std::string& requestId,
+                                       const std::string& stationId,
+                                       ChargingRequest& outRequest,
+                                       ChargingSession& outSession,
+                                       ChargingQueue* queue,
+                                       int callerUserId,
+                                       const std::string& callerRole) {
+    if (callerRole != "operator" && callerRole != "admin") {
+        return false;
+    }
+
+    if (db == nullptr || !db->isOpen()) return false;
+    sqlite3* handle = db->getDbHandle();
+
+    ChargingRequest req;
+    if (!getRequestById(requestId, req)) return false;
+    if (req.getStatus() != "queued") return false;
+
+    ChargingStation st;
+    if (!getStationById(stationId, st)) return false;
+    if (st.getStatus() != "available" || !st.getCurrentVehicleId().empty()) return false;
+
+    std::string reqConnector = req.getConnectorType();
+    if (!reqConnector.empty() && st.getConnectorType() != reqConnector) {
+        return false;
+    }
+
+    if (!db->beginTransaction()) return false;
+
+    std::string updSt = "UPDATE ChargingStation SET status = 'charging', current_vehicle_id = ?, "
+                        "session_start = datetime('now'), available_ports = 0 WHERE id = ? AND status = 'available';";
+    sqlite3_stmt* stStmt = nullptr;
+    if (sqlite3_prepare_v2(handle, updSt.c_str(), -1, &stStmt, nullptr) != SQLITE_OK) {
+        db->rollbackTransaction();
+        return false;
+    }
+    sqlite3_bind_text(stStmt, 1, req.getVehicleId().c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stStmt, 2, stationId.c_str(), -1, SQLITE_STATIC);
+    int rc = sqlite3_step(stStmt);
+    sqlite3_finalize(stStmt);
+    if (rc != SQLITE_DONE || sqlite3_changes(handle) != 1) {
+        db->rollbackTransaction();
+        return false;
+    }
+
+    std::string updReq = "UPDATE ChargingRequest SET status = 'active', station_id = ?, bay_id = ? "
+                         "WHERE id = ? AND status = 'queued';";
+    sqlite3_stmt* reqStmt = nullptr;
+    if (sqlite3_prepare_v2(handle, updReq.c_str(), -1, &reqStmt, nullptr) != SQLITE_OK) {
+        db->rollbackTransaction();
+        return false;
+    }
+    sqlite3_bind_text(reqStmt, 1, stationId.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(reqStmt, 2, st.getLocation().c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(reqStmt, 3, requestId.c_str(), -1, SQLITE_STATIC);
+    rc = sqlite3_step(reqStmt);
+    sqlite3_finalize(reqStmt);
+    if (rc != SQLITE_DONE || sqlite3_changes(handle) != 1) {
+        db->rollbackTransaction();
+        return false;
+    }
+
+    std::string updEv = "UPDATE EV SET status = 'charging', last_activity = datetime('now') WHERE id = ?;";
+    sqlite3_stmt* evStmt = nullptr;
+    if (sqlite3_prepare_v2(handle, updEv.c_str(), -1, &evStmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(evStmt, 1, req.getVehicleId().c_str(), -1, SQLITE_STATIC);
+        sqlite3_step(evStmt);
+        sqlite3_finalize(evStmt);
+    }
+
+    std::string sesId = "SES-" + std::to_string(s_sessionCounter++) + "-" + std::to_string(time(nullptr) % 10000);
+    std::string insSes = "INSERT INTO ChargingSession (id, vehicle_id, ev_model, station_id, start_time, end_time, "
+                         "battery_start, battery_end, target_charge, energy_consumed, estimated_cost, status, user_id, request_id) "
+                         "VALUES (?, ?, 'Electric Vehicle', ?, datetime('now'), NULL, 20.0, NULL, ?, 0.0, 150.0, 'active', ?, ?);";
+    sqlite3_stmt* sesStmt = nullptr;
+    if (sqlite3_prepare_v2(handle, insSes.c_str(), -1, &sesStmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(sesStmt, 1, sesId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(sesStmt, 2, req.getVehicleId().c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(sesStmt, 3, stationId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_double(sesStmt, 4, req.getTargetCharge());
+        sqlite3_bind_int(sesStmt, 5, req.getUserId());
+        sqlite3_bind_text(sesStmt, 6, requestId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_step(sesStmt);
+        sqlite3_finalize(sesStmt);
+    }
+
+    db->commitTransaction();
+
+    if (queue != nullptr) {
+        queue->remove(req.getVehicleId());
+    }
+
+    getRequestById(requestId, outRequest);
+    getSessionById(sesId, outSession);
     return true;
 }
 
@@ -601,60 +1121,61 @@ int StationService::getAllSessions(ChargingSession outList[], int maxCapacity, c
                           "ChargingSession.energy_consumed, ChargingSession.estimated_cost, ChargingSession.status, "
                           "ChargingSession.user_id, ChargingSession.request_id, ChargingStation.location "
                           "FROM ChargingSession "
-                          "LEFT JOIN ChargingStation ON ChargingSession.station_id = ChargingStation.id ";
-
-        bool hasWhere = false;
-        if (userId > 0) {
-            sql += "WHERE (ChargingSession.user_id = ? OR ChargingSession.vehicle_id IN (SELECT id FROM EV WHERE user_id = ?)) ";
-            hasWhere = true;
-        }
+                          "LEFT JOIN ChargingStation ON ChargingSession.station_id = ChargingStation.id "
+                          "WHERE 1=1 ";
 
         if (!statusFilter.empty()) {
-            sql += hasWhere ? "AND ChargingSession.status = ? " : "WHERE ChargingSession.status = ? ";
+            sql += "AND ChargingSession.status = ? ";
         }
-
+        if (userId > 0) {
+            sql += "AND ChargingSession.user_id = ? ";
+        }
         sql += "ORDER BY ChargingSession.start_time DESC;";
 
         sqlite3_stmt* stmt = nullptr;
         if (sqlite3_prepare_v2(handle, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
-            int bindIdx = 1;
-            if (userId > 0) {
-                sqlite3_bind_int(stmt, bindIdx++, userId);
-                sqlite3_bind_int(stmt, bindIdx++, userId);
-            }
+            int bindIndex = 1;
             if (!statusFilter.empty()) {
-                sqlite3_bind_text(stmt, bindIdx++, statusFilter.c_str(), -1, SQLITE_STATIC);
+                sqlite3_bind_text(stmt, bindIndex++, statusFilter.c_str(), -1, SQLITE_STATIC);
+            }
+            if (userId > 0) {
+                sqlite3_bind_int(stmt, bindIndex++, userId);
             }
 
             while (sqlite3_step(stmt) == SQLITE_ROW && count < maxCapacity) {
-                const char* idText    = (const char*)sqlite3_column_text(stmt, 0);
-                const char* vIdText   = (const char*)sqlite3_column_text(stmt, 1);
-                const char* mText     = (const char*)sqlite3_column_text(stmt, 2);
-                const char* sIdText   = (const char*)sqlite3_column_text(stmt, 3);
-                const char* sTimeText = (const char*)sqlite3_column_text(stmt, 4);
-                const char* eTimeText = (const char*)sqlite3_column_text(stmt, 5);
-                double bStart         = sqlite3_column_double(stmt, 6);
-                double bEnd           = (sqlite3_column_type(stmt, 7) == SQLITE_NULL) ? 0.0 : sqlite3_column_double(stmt, 7);
-                double target         = sqlite3_column_double(stmt, 8);
-                double energy         = sqlite3_column_double(stmt, 9);
-                double cost           = sqlite3_column_double(stmt, 10);
-                const char* statText  = (const char*)sqlite3_column_text(stmt, 11);
-                int uId               = sqlite3_column_int(stmt, 12);
-                const char* reqText   = (const char*)sqlite3_column_text(stmt, 13);
-                const char* locText   = (const char*)sqlite3_column_text(stmt, 14);
+                const char* idText = (const char*)sqlite3_column_text(stmt, 0);
+                const char* vehText = (const char*)sqlite3_column_text(stmt, 1);
+                const char* modText = (const char*)sqlite3_column_text(stmt, 2);
+                const char* stText = (const char*)sqlite3_column_text(stmt, 3);
+                const char* startText = (const char*)sqlite3_column_text(stmt, 4);
+                const char* endText = (const char*)sqlite3_column_text(stmt, 5);
+                double bStart = sqlite3_column_double(stmt, 6);
+                double bEnd = sqlite3_column_double(stmt, 7);
+                double tCharge = sqlite3_column_double(stmt, 8);
+                double energy = sqlite3_column_double(stmt, 9);
+                double cost = sqlite3_column_double(stmt, 10);
+                const char* statText = (const char*)sqlite3_column_text(stmt, 11);
+                int uId = sqlite3_column_int(stmt, 12);
+                const char* reqIdText = (const char*)sqlite3_column_text(stmt, 13);
+                const char* bayText = (const char*)sqlite3_column_text(stmt, 14);
 
-                outList[count] = ChargingSession(idText ? idText : "",
-                                                 vIdText ? vIdText : "",
-                                                 mText ? mText : "",
-                                                 sIdText ? sIdText : "",
-                                                 bStart, target,
-                                                 sTimeText ? sTimeText : "",
-                                                 eTimeText ? eTimeText : "",
-                                                 bEnd, energy, cost,
-                                                 statText ? statText : "active",
-                                                 uId,
-                                                 reqText ? reqText : "",
-                                                 locText ? locText : "Bay 1");
+                outList[count] = ChargingSession(
+                    idText ? idText : "",
+                    vehText ? vehText : "",
+                    modText ? modText : "Electric Vehicle",
+                    stText ? stText : "",
+                    bStart,
+                    tCharge,
+                    startText ? startText : "",
+                    endText ? endText : "",
+                    bEnd,
+                    energy,
+                    cost,
+                    statText ? statText : "active",
+                    uId,
+                    reqIdText ? reqIdText : "",
+                    bayText ? bayText : "Bay 1"
+                );
                 count++;
             }
             sqlite3_finalize(stmt);
@@ -664,12 +1185,13 @@ int StationService::getAllSessions(ChargingSession outList[], int maxCapacity, c
 
     // In-memory fallback
     for (int i = 0; i < sessionCount && count < maxCapacity; i++) {
-        bool statusMatch = (statusFilter.empty() || sessionArray[i].getStatus() == statusFilter);
-        bool userMatch = (userId <= 0 || sessionArray[i].getUserId() == userId);
-        if (statusMatch && userMatch) {
+        bool matchesStatus = statusFilter.empty() || sessionArray[i].getStatus() == statusFilter;
+        bool matchesUser   = (userId <= 0) || sessionArray[i].getUserId() == userId;
+        if (matchesStatus && matchesUser) {
             outList[count++] = sessionArray[i];
         }
     }
+
     return count;
 }
 
@@ -688,34 +1210,39 @@ bool StationService::getSessionById(const std::string& id, ChargingSession& outS
         if (sqlite3_prepare_v2(handle, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
             sqlite3_bind_text(stmt, 1, id.c_str(), -1, SQLITE_STATIC);
             if (sqlite3_step(stmt) == SQLITE_ROW) {
-                const char* idText    = (const char*)sqlite3_column_text(stmt, 0);
-                const char* vIdText   = (const char*)sqlite3_column_text(stmt, 1);
-                const char* mText     = (const char*)sqlite3_column_text(stmt, 2);
-                const char* sIdText   = (const char*)sqlite3_column_text(stmt, 3);
-                const char* sTimeText = (const char*)sqlite3_column_text(stmt, 4);
-                const char* eTimeText = (const char*)sqlite3_column_text(stmt, 5);
-                double bStart         = sqlite3_column_double(stmt, 6);
-                double bEnd           = (sqlite3_column_type(stmt, 7) == SQLITE_NULL) ? 0.0 : sqlite3_column_double(stmt, 7);
-                double target         = sqlite3_column_double(stmt, 8);
-                double energy         = sqlite3_column_double(stmt, 9);
-                double cost           = sqlite3_column_double(stmt, 10);
-                const char* statText  = (const char*)sqlite3_column_text(stmt, 11);
-                int uId               = sqlite3_column_int(stmt, 12);
-                const char* reqText   = (const char*)sqlite3_column_text(stmt, 13);
-                const char* locText   = (const char*)sqlite3_column_text(stmt, 14);
+                const char* idText = (const char*)sqlite3_column_text(stmt, 0);
+                const char* vehText = (const char*)sqlite3_column_text(stmt, 1);
+                const char* modText = (const char*)sqlite3_column_text(stmt, 2);
+                const char* stText = (const char*)sqlite3_column_text(stmt, 3);
+                const char* startText = (const char*)sqlite3_column_text(stmt, 4);
+                const char* endText = (const char*)sqlite3_column_text(stmt, 5);
+                double bStart = sqlite3_column_double(stmt, 6);
+                double bEnd = sqlite3_column_double(stmt, 7);
+                double tCharge = sqlite3_column_double(stmt, 8);
+                double energy = sqlite3_column_double(stmt, 9);
+                double cost = sqlite3_column_double(stmt, 10);
+                const char* statText = (const char*)sqlite3_column_text(stmt, 11);
+                int uId = sqlite3_column_int(stmt, 12);
+                const char* reqIdText = (const char*)sqlite3_column_text(stmt, 13);
+                const char* bayText = (const char*)sqlite3_column_text(stmt, 14);
 
-                outSession = ChargingSession(idText ? idText : "",
-                                             vIdText ? vIdText : "",
-                                             mText ? mText : "",
-                                             sIdText ? sIdText : "",
-                                             bStart, target,
-                                             sTimeText ? sTimeText : "",
-                                             eTimeText ? eTimeText : "",
-                                             bEnd, energy, cost,
-                                             statText ? statText : "active",
-                                             uId,
-                                             reqText ? reqText : "",
-                                             locText ? locText : "Bay 1");
+                outSession = ChargingSession(
+                    idText ? idText : "",
+                    vehText ? vehText : "",
+                    modText ? modText : "Electric Vehicle",
+                    stText ? stText : "",
+                    bStart,
+                    tCharge,
+                    startText ? startText : "",
+                    endText ? endText : "",
+                    bEnd,
+                    energy,
+                    cost,
+                    statText ? statText : "active",
+                    uId,
+                    reqIdText ? reqIdText : "",
+                    bayText ? bayText : "Bay 1"
+                );
                 sqlite3_finalize(stmt);
                 return true;
             }
@@ -742,39 +1269,45 @@ bool StationService::getActiveSessionByStationId(const std::string& stationId, C
                           "ChargingSession.user_id, ChargingSession.request_id, ChargingStation.location "
                           "FROM ChargingSession "
                           "LEFT JOIN ChargingStation ON ChargingSession.station_id = ChargingStation.id "
-                          "WHERE ChargingSession.station_id = ? AND ChargingSession.status = 'active' LIMIT 1;";
+                          "WHERE ChargingSession.station_id = ? AND ChargingSession.status = 'active' "
+                          "ORDER BY ChargingSession.start_time DESC LIMIT 1;";
         sqlite3_stmt* stmt = nullptr;
         if (sqlite3_prepare_v2(handle, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
             sqlite3_bind_text(stmt, 1, stationId.c_str(), -1, SQLITE_STATIC);
             if (sqlite3_step(stmt) == SQLITE_ROW) {
-                const char* idText    = (const char*)sqlite3_column_text(stmt, 0);
-                const char* vIdText   = (const char*)sqlite3_column_text(stmt, 1);
-                const char* mText     = (const char*)sqlite3_column_text(stmt, 2);
-                const char* sIdText   = (const char*)sqlite3_column_text(stmt, 3);
-                const char* sTimeText = (const char*)sqlite3_column_text(stmt, 4);
-                const char* eTimeText = (const char*)sqlite3_column_text(stmt, 5);
-                double bStart         = sqlite3_column_double(stmt, 6);
-                double bEnd           = (sqlite3_column_type(stmt, 7) == SQLITE_NULL) ? 0.0 : sqlite3_column_double(stmt, 7);
-                double target         = sqlite3_column_double(stmt, 8);
-                double energy         = sqlite3_column_double(stmt, 9);
-                double cost           = sqlite3_column_double(stmt, 10);
-                const char* statText  = (const char*)sqlite3_column_text(stmt, 11);
-                int uId               = sqlite3_column_int(stmt, 12);
-                const char* reqText   = (const char*)sqlite3_column_text(stmt, 13);
-                const char* locText   = (const char*)sqlite3_column_text(stmt, 14);
+                const char* idText = (const char*)sqlite3_column_text(stmt, 0);
+                const char* vehText = (const char*)sqlite3_column_text(stmt, 1);
+                const char* modText = (const char*)sqlite3_column_text(stmt, 2);
+                const char* stText = (const char*)sqlite3_column_text(stmt, 3);
+                const char* startText = (const char*)sqlite3_column_text(stmt, 4);
+                const char* endText = (const char*)sqlite3_column_text(stmt, 5);
+                double bStart = sqlite3_column_double(stmt, 6);
+                double bEnd = sqlite3_column_double(stmt, 7);
+                double tCharge = sqlite3_column_double(stmt, 8);
+                double energy = sqlite3_column_double(stmt, 9);
+                double cost = sqlite3_column_double(stmt, 10);
+                const char* statText = (const char*)sqlite3_column_text(stmt, 11);
+                int uId = sqlite3_column_int(stmt, 12);
+                const char* reqIdText = (const char*)sqlite3_column_text(stmt, 13);
+                const char* bayText = (const char*)sqlite3_column_text(stmt, 14);
 
-                outSession = ChargingSession(idText ? idText : "",
-                                             vIdText ? vIdText : "",
-                                             mText ? mText : "",
-                                             sIdText ? sIdText : "",
-                                             bStart, target,
-                                             sTimeText ? sTimeText : "",
-                                             eTimeText ? eTimeText : "",
-                                             bEnd, energy, cost,
-                                             statText ? statText : "active",
-                                             uId,
-                                             reqText ? reqText : "",
-                                             locText ? locText : "Bay 1");
+                outSession = ChargingSession(
+                    idText ? idText : "",
+                    vehText ? vehText : "",
+                    modText ? modText : "Electric Vehicle",
+                    stText ? stText : "",
+                    bStart,
+                    tCharge,
+                    startText ? startText : "",
+                    endText ? endText : "",
+                    bEnd,
+                    energy,
+                    cost,
+                    statText ? statText : "active",
+                    uId,
+                    reqIdText ? reqIdText : "",
+                    bayText ? bayText : "Bay 1"
+                );
                 sqlite3_finalize(stmt);
                 return true;
             }
@@ -958,13 +1491,12 @@ bool StationService::createChargingSession(const std::string& evId,
     return false;
 }
 
-// ─── Live Progress Simulation (Phase 8) ───────────────────────────────────
 bool StationService::getSessionProgress(const std::string& sessionId,
-                                        ChargingSession& outSession,
-                                        double& currentSoC,
-                                        double& energyDelivered,
-                                        double& currentCost,
-                                        int& elapsedSeconds) {
+                                       ChargingSession& outSession,
+                                       double& currentSoC,
+                                       double& energyDelivered,
+                                       double& currentCost,
+                                       int& elapsedSeconds) {
     if (!getSessionById(sessionId, outSession)) {
         return false;
     }
@@ -1032,7 +1564,6 @@ bool StationService::getSessionProgress(const std::string& sessionId,
     return true;
 }
 
-// ─── Complete Charging Session (Phase 9 & 10) ─────────────────────────────
 bool StationService::completeChargingSession(const std::string& stationOrSessionId,
                                             ChargingSession& outCompletedSession,
                                             Transaction& outTxn,
@@ -1040,11 +1571,6 @@ bool StationService::completeChargingSession(const std::string& stationOrSession
                                             ChargingSession* outDispatchedSession,
                                             int callerUserId,
                                             const std::string& callerRole) {
-    ChargingQueue queueBackup;
-    if (queue != nullptr) {
-        queueBackup = *queue;
-    }
-
     if (db != nullptr && db->isOpen()) {
         sqlite3* handle = db->getDbHandle();
 
@@ -1074,11 +1600,11 @@ bool StationService::completeChargingSession(const std::string& stationOrSession
             targetCharge = 85.0;
         }
 
-        // Ownership / RBAC Authorization Guard (Phase 14)
+        // Ownership / RBAC Authorization Guard: User cannot complete another customer's session
         if (callerRole == "user" && callerUserId > 0) {
             int sessionOwnerId = activeSession.getUserId();
             if (sessionOwnerId > 0 && sessionOwnerId != callerUserId) {
-                return false; // User cannot stop another user's session
+                return false;
             }
         }
 
@@ -1118,7 +1644,6 @@ bool StationService::completeChargingSession(const std::string& stationOrSession
                                 "WHERE id = ? AND status = 'active';";
         sqlite3_stmt* updSesStmt = nullptr;
         if (sqlite3_prepare_v2(handle, updSesSql.c_str(), -1, &updSesStmt, nullptr) != SQLITE_OK) {
-            if (queue != nullptr) *queue = queueBackup;
             db->rollbackTransaction();
             return false;
         }
@@ -1129,7 +1654,6 @@ bool StationService::completeChargingSession(const std::string& stationOrSession
         int rc = sqlite3_step(updSesStmt);
         sqlite3_finalize(updSesStmt);
         if (rc != SQLITE_DONE || sqlite3_changes(handle) != 1) {
-            if (queue != nullptr) *queue = queueBackup;
             db->rollbackTransaction();
             return false;
         }
@@ -1138,7 +1662,6 @@ bool StationService::completeChargingSession(const std::string& stationOrSession
         std::string updEvSql = "UPDATE EV SET status = 'available', current_charge = ?, last_activity = datetime('now') WHERE id = ?;";
         sqlite3_stmt* updEvStmt = nullptr;
         if (sqlite3_prepare_v2(handle, updEvSql.c_str(), -1, &updEvStmt, nullptr) != SQLITE_OK) {
-            if (queue != nullptr) *queue = queueBackup;
             db->rollbackTransaction();
             return false;
         }
@@ -1147,7 +1670,6 @@ bool StationService::completeChargingSession(const std::string& stationOrSession
         rc = sqlite3_step(updEvStmt);
         sqlite3_finalize(updEvStmt);
         if (rc != SQLITE_DONE || sqlite3_changes(handle) != 1) {
-            if (queue != nullptr) *queue = queueBackup;
             db->rollbackTransaction();
             return false;
         }
@@ -1160,7 +1682,6 @@ bool StationService::completeChargingSession(const std::string& stationOrSession
                                 "datetime('now'), 'completed', ?, ?);";
         sqlite3_stmt* insTxnStmt = nullptr;
         if (sqlite3_prepare_v2(handle, insTxnSql.c_str(), -1, &insTxnStmt, nullptr) != SQLITE_OK) {
-            if (queue != nullptr) *queue = queueBackup;
             db->rollbackTransaction();
             return false;
         }
@@ -1176,7 +1697,6 @@ bool StationService::completeChargingSession(const std::string& stationOrSession
         rc = sqlite3_step(insTxnStmt);
         sqlite3_finalize(insTxnStmt);
         if (rc != SQLITE_DONE || sqlite3_changes(handle) != 1) {
-            if (queue != nullptr) *queue = queueBackup;
             db->rollbackTransaction();
             return false;
         }
@@ -1193,147 +1713,34 @@ bool StationService::completeChargingSession(const std::string& stationOrSession
             sqlite3_finalize(updReqStmt);
         }
 
-        // E. Automatic FIFO Queue Dispatch if waiting EVs exist
-        bool dispatched = false;
-        if (queue != nullptr && !queue->isEmpty()) {
-            while (!queue->isEmpty()) {
-                std::string waitingEvId = queue->dequeue();
-
-                std::string checkNextSql = "SELECT model, battery_capacity, current_charge, status, user_id FROM EV WHERE id = ?;";
-                sqlite3_stmt* nextStmt = nullptr;
-                std::string nextModel = "";
-                double nextCap = 50.0;
-                double nextCharge = 20.0;
-                std::string nextStatus = "";
-                int nextOwnerId = 0;
-
-                if (sqlite3_prepare_v2(handle, checkNextSql.c_str(), -1, &nextStmt, nullptr) == SQLITE_OK) {
-                    sqlite3_bind_text(nextStmt, 1, waitingEvId.c_str(), -1, SQLITE_STATIC);
-                    if (sqlite3_step(nextStmt) == SQLITE_ROW) {
-                        const char* mTxt = (const char*)sqlite3_column_text(nextStmt, 0);
-                        nextModel = mTxt ? mTxt : "Electric Vehicle";
-                        nextCap = sqlite3_column_double(nextStmt, 1);
-                        nextCharge = sqlite3_column_double(nextStmt, 2);
-                        const char* sTxt = (const char*)sqlite3_column_text(nextStmt, 3);
-                        nextStatus = sTxt ? sTxt : "";
-                        nextOwnerId = sqlite3_column_int(nextStmt, 4);
-                    }
-                    sqlite3_finalize(nextStmt);
-                }
-
-                if (nextStatus == "waiting") {
-                    double nextTarget = 85.0;
-                    if (nextTarget <= nextCharge) nextTarget = std::min(100.0, nextCharge + 20.0);
-                    double nextEnergy = ((nextTarget - nextCharge) / 100.0) * nextCap;
-                    double nextCost = Transaction::calculateTariff(nextEnergy, "charging");
-
-                    std::string nextSesId = "SES-" + std::to_string(s_sessionCounter++) + "-" + std::to_string(time(nullptr) % 10000);
-
-                    // Insert next active session
-                    std::string insNextSql = "INSERT INTO ChargingSession (id, vehicle_id, ev_model, station_id, "
-                                             "start_time, end_time, battery_start, battery_end, target_charge, "
-                                             "energy_consumed, estimated_cost, status, user_id) "
-                                             "VALUES (?, ?, ?, ?, datetime('now'), NULL, ?, NULL, ?, 0.0, ?, 'active', ?);";
-                    sqlite3_stmt* insNextStmt = nullptr;
-                    if (sqlite3_prepare_v2(handle, insNextSql.c_str(), -1, &insNextStmt, nullptr) != SQLITE_OK) {
-                        if (queue != nullptr) *queue = queueBackup;
-                        db->rollbackTransaction();
-                        return false;
-                    }
-                    sqlite3_bind_text(insNextStmt, 1, nextSesId.c_str(), -1, SQLITE_STATIC);
-                    sqlite3_bind_text(insNextStmt, 2, waitingEvId.c_str(), -1, SQLITE_STATIC);
-                    sqlite3_bind_text(insNextStmt, 3, nextModel.c_str(), -1, SQLITE_STATIC);
-                    sqlite3_bind_text(insNextStmt, 4, stationId.c_str(), -1, SQLITE_STATIC);
-                    sqlite3_bind_double(insNextStmt, 5, nextCharge);
-                    sqlite3_bind_double(insNextStmt, 6, nextTarget);
-                    sqlite3_bind_double(insNextStmt, 7, nextCost);
-                    sqlite3_bind_int(insNextStmt, 8, nextOwnerId);
-                    rc = sqlite3_step(insNextStmt);
-                    sqlite3_finalize(insNextStmt);
-                    if (rc != SQLITE_DONE) {
-                        if (queue != nullptr) *queue = queueBackup;
-                        db->rollbackTransaction();
-                        return false;
-                    }
-
-                    // Update Station to new vehicle
-                    std::string updStNext = "UPDATE ChargingStation SET status = 'charging', current_vehicle_id = ?, "
-                                           "session_start = datetime('now'), available_ports = 0 WHERE id = ?;";
-                    sqlite3_stmt* updStNextStmt = nullptr;
-                    if (sqlite3_prepare_v2(handle, updStNext.c_str(), -1, &updStNextStmt, nullptr) != SQLITE_OK) {
-                        if (queue != nullptr) *queue = queueBackup;
-                        db->rollbackTransaction();
-                        return false;
-                    }
-                    sqlite3_bind_text(updStNextStmt, 1, waitingEvId.c_str(), -1, SQLITE_STATIC);
-                    sqlite3_bind_text(updStNextStmt, 2, stationId.c_str(), -1, SQLITE_STATIC);
-                    rc = sqlite3_step(updStNextStmt);
-                    sqlite3_finalize(updStNextStmt);
-                    if (rc != SQLITE_DONE || sqlite3_changes(handle) != 1) {
-                        if (queue != nullptr) *queue = queueBackup;
-                        db->rollbackTransaction();
-                        return false;
-                    }
-
-                    // Update next EV to charging
-                    std::string updEvNext = "UPDATE EV SET status = 'charging', last_activity = datetime('now') WHERE id = ?;";
-                    sqlite3_stmt* updEvNextStmt = nullptr;
-                    if (sqlite3_prepare_v2(handle, updEvNext.c_str(), -1, &updEvNextStmt, nullptr) != SQLITE_OK) {
-                        if (queue != nullptr) *queue = queueBackup;
-                        db->rollbackTransaction();
-                        return false;
-                    }
-                    sqlite3_bind_text(updEvNextStmt, 1, waitingEvId.c_str(), -1, SQLITE_STATIC);
-                    rc = sqlite3_step(updEvNextStmt);
-                    sqlite3_finalize(updEvNextStmt);
-                    if (rc != SQLITE_DONE || sqlite3_changes(handle) != 1) {
-                        if (queue != nullptr) *queue = queueBackup;
-                        db->rollbackTransaction();
-                        return false;
-                    }
-
-                    // Update next request status to allocated
-                    std::string updNextReq = "UPDATE ChargingRequest SET status = 'allocated', station_id = ?, bay_id = (SELECT location FROM ChargingStation WHERE id = ?) "
-                                             "WHERE vehicle_id = ? AND status = 'queued';";
-                    sqlite3_stmt* updNextReqStmt = nullptr;
-                    if (sqlite3_prepare_v2(handle, updNextReq.c_str(), -1, &updNextReqStmt, nullptr) == SQLITE_OK) {
-                        sqlite3_bind_text(updNextReqStmt, 1, stationId.c_str(), -1, SQLITE_STATIC);
-                        sqlite3_bind_text(updNextReqStmt, 2, stationId.c_str(), -1, SQLITE_STATIC);
-                        sqlite3_bind_text(updNextReqStmt, 3, waitingEvId.c_str(), -1, SQLITE_STATIC);
-                        sqlite3_step(updNextReqStmt);
-                        sqlite3_finalize(updNextReqStmt);
-                    }
-
-                    dispatched = true;
-                    if (outDispatchedSession != nullptr) {
-                        *outDispatchedSession = ChargingSession(nextSesId, waitingEvId, nextModel, stationId,
-                                                                nextCharge, nextTarget, "", "", 0.0, 0.0, nextCost, "active", nextOwnerId);
-                    }
-                    break;
-                }
-            }
+        // E. Release Station back to available
+        std::string freeStSql = "UPDATE ChargingStation SET status = 'available', current_vehicle_id = NULL, "
+                                "session_start = NULL, available_ports = 1 WHERE id = ?;";
+        sqlite3_stmt* freeStStmt = nullptr;
+        if (sqlite3_prepare_v2(handle, freeStSql.c_str(), -1, &freeStStmt, nullptr) != SQLITE_OK) {
+            db->rollbackTransaction();
+            return false;
         }
-
-        if (!dispatched) {
-            std::string freeStSql = "UPDATE ChargingStation SET status = 'available', current_vehicle_id = NULL, "
-                                    "session_start = NULL, available_ports = 1 WHERE id = ?;";
-            sqlite3_stmt* freeStStmt = nullptr;
-            if (sqlite3_prepare_v2(handle, freeStSql.c_str(), -1, &freeStStmt, nullptr) != SQLITE_OK) {
-                if (queue != nullptr) *queue = queueBackup;
-                db->rollbackTransaction();
-                return false;
-            }
-            sqlite3_bind_text(freeStStmt, 1, stationId.c_str(), -1, SQLITE_STATIC);
-            rc = sqlite3_step(freeStStmt);
-            sqlite3_finalize(freeStStmt);
-            if (rc != SQLITE_DONE || sqlite3_changes(handle) != 1) {
-                if (queue != nullptr) *queue = queueBackup;
-                db->rollbackTransaction();
-                return false;
-            }
+        sqlite3_bind_text(freeStStmt, 1, stationId.c_str(), -1, SQLITE_STATIC);
+        rc = sqlite3_step(freeStStmt);
+        sqlite3_finalize(freeStStmt);
+        if (rc != SQLITE_DONE || sqlite3_changes(handle) != 1) {
+            db->rollbackTransaction();
+            return false;
         }
 
         db->commitTransaction();
+
+        // F. Trigger Automatic FIFO Queue Processing for newly freed bay
+        processQueueForAvailableStations(queue);
+
+        // Check if an eligible waiting request was auto-dispatched to this released station
+        if (outDispatchedSession != nullptr) {
+            ChargingSession newlyActive;
+            if (getActiveSessionByStationId(stationId, newlyActive)) {
+                *outDispatchedSession = newlyActive;
+            }
+        }
 
         outCompletedSession = activeSession;
         outCompletedSession.setStatus("completed");
@@ -1349,60 +1756,60 @@ bool StationService::completeChargingSession(const std::string& stationOrSession
     for (int i = 0; i < sessionCount; i++) {
         if ((sessionArray[i].getStationId() == stationOrSessionId || sessionArray[i].getId() == stationOrSessionId) &&
             sessionArray[i].getStatus() == "active") {
+
             sessionArray[i].setStatus("completed");
-            sessionArray[i].setBatteryEnd(sessionArray[i].getTargetCharge());
-            sessionArray[i].setEnergyConsumed(25.0);
-            sessionArray[i].setEstimatedCost(Transaction::calculateTariff(25.0, "charging"));
+            sessionArray[i].setBatteryEnd(85.0);
+            sessionArray[i].setEndTime("2026-10-19 11:30:00");
+
+            releaseStation(sessionArray[i].getStationId(), queue);
 
             outCompletedSession = sessionArray[i];
-            outTxn = Transaction("TXN-" + std::to_string(5000 + i), sessionArray[i].getVehicleId(),
-                                 "charging", sessionArray[i].getStationId(), "Session completed",
-                                 outCompletedSession.getEstimatedCost(), 25.0, 30, "", "completed", callerUserId, sessionArray[i].getId());
-
-            releaseStation(sessionArray[i].getStationId());
+            static int inMemTxnCounter = 9000;
+            outTxn = Transaction("TXN-" + std::to_string(inMemTxnCounter++), sessionArray[i].getVehicleId(),
+                                 "charging", sessionArray[i].getStationId(), "Charging completed",
+                                 sessionArray[i].getEstimatedCost(), 30.0, 60, "2026-10-19 11:30:00",
+                                 "completed", sessionArray[i].getUserId(), sessionArray[i].getId());
             return true;
         }
     }
     return false;
 }
 
-// ─── FIFO Queue Helpers ───────────────────────────────────────────────────
 bool StationService::enqueueWaitingEV(const std::string& evId, ChargingQueue& queue) {
     if (queue.isFull()) return false;
     if (queue.contains(evId)) return false;
 
     if (db != nullptr && db->isOpen()) {
         sqlite3* handle = db->getDbHandle();
-        std::string sql = "UPDATE EV SET status = 'waiting', last_activity = datetime('now') "
-                          "WHERE id = ? AND status != 'charging' AND status != 'swapping';";
+        std::string sql = "UPDATE EV SET status = 'waiting', last_activity = datetime('now') WHERE id = ?;";
         sqlite3_stmt* stmt = nullptr;
-        if (sqlite3_prepare_v2(handle, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK) {
+        if (sqlite3_prepare_v2(handle, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, evId.c_str(), -1, SQLITE_STATIC);
+            int rc = sqlite3_step(stmt);
+            sqlite3_finalize(stmt);
+            if (rc != SQLITE_DONE || sqlite3_changes(handle) != 1) {
+                return false;
+            }
+        } else {
             return false;
         }
-        sqlite3_bind_text(stmt, 1, evId.c_str(), -1, SQLITE_STATIC);
-        int rc = sqlite3_step(stmt);
-        sqlite3_finalize(stmt);
-
-        if (rc == SQLITE_DONE && sqlite3_changes(handle) > 0) {
-            queue.enqueue(evId);
-            return true;
-        }
-        return false;
     }
 
-    queue.enqueue(evId);
-    return true;
+    return queue.enqueue(evId);
 }
 
 int StationService::rehydrateChargingQueue(ChargingQueue& queue) {
     queue.clear();
     int count = 0;
+
     if (db != nullptr && db->isOpen()) {
         sqlite3* handle = db->getDbHandle();
+        // Strict FIFO ordering by created_at / last_activity
         std::string sql = "SELECT id FROM EV WHERE status = 'waiting' ORDER BY last_activity ASC, registered_at ASC, rowid ASC;";
         sqlite3_stmt* stmt = nullptr;
+
         if (sqlite3_prepare_v2(handle, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
-            while (sqlite3_step(stmt) == SQLITE_ROW) {
+            while (sqlite3_step(stmt) == SQLITE_ROW && count < CHARGING_QUEUE_CAPACITY) {
                 const char* idText = (const char*)sqlite3_column_text(stmt, 0);
                 if (idText) {
                     queue.enqueue(idText);
@@ -1411,6 +1818,11 @@ int StationService::rehydrateChargingQueue(ChargingQueue& queue) {
             }
             sqlite3_finalize(stmt);
         }
+    } else {
+        queue.enqueue("EV-102");
+        queue.enqueue("EV-104");
+        count = 2;
     }
+
     return count;
 }
