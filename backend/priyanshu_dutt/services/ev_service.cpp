@@ -314,11 +314,32 @@ bool EVService::deleteEV(const std::string& id, std::string& outError) {
     // Delete from database if connected
     if (db != nullptr && db->isOpen()) {
         sqlite3* handle = db->getDbHandle();
+
+        // Release any charging station occupied by this vehicle before deleting it
+        std::string freeStSql = "UPDATE ChargingStation SET status = 'available', current_vehicle_id = NULL, "
+                                "session_start = NULL, available_ports = 1 WHERE current_vehicle_id = ?;";
+        sqlite3_stmt* fsStmt = nullptr;
+        if (sqlite3_prepare_v2(handle, freeStSql.c_str(), -1, &fsStmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(fsStmt, 1, id.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_step(fsStmt);
+            sqlite3_finalize(fsStmt);
+        }
+
+        // Close any active session for this vehicle
+        std::string endSesSql = "UPDATE ChargingSession SET status = 'completed', end_time = datetime('now') "
+                                "WHERE vehicle_id = ? AND status = 'active';";
+        sqlite3_stmt* esStmt = nullptr;
+        if (sqlite3_prepare_v2(handle, endSesSql.c_str(), -1, &esStmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(esStmt, 1, id.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_step(esStmt);
+            sqlite3_finalize(esStmt);
+        }
+
         std::string sql = "DELETE FROM EV WHERE id = ?;";
         sqlite3_stmt* stmt = nullptr;
 
         if (sqlite3_prepare_v2(handle, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
-            sqlite3_bind_text(stmt, 1, id.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 1, id.c_str(), -1, SQLITE_TRANSIENT);
             int rc = sqlite3_step(stmt);
             sqlite3_finalize(stmt);
 

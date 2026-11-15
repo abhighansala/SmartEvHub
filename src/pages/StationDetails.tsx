@@ -11,6 +11,10 @@ import { useTheme, alpha } from '@mui/material/styles';
 import ArrowBackOutlined from '@mui/icons-material/ArrowBackOutlined';
 import StopCircleOutlined from '@mui/icons-material/StopCircleOutlined';
 import ElectricBoltOutlined from '@mui/icons-material/ElectricBoltOutlined';
+import CheckCircleOutline from '@mui/icons-material/CheckCircleOutline';
+import BuildOutlined from '@mui/icons-material/BuildOutlined';
+import PowerOffOutlined from '@mui/icons-material/PowerOffOutlined';
+import HourglassTopOutlined from '@mui/icons-material/HourglassTopOutlined';
 
 import PageHeader from '@/components/common/PageHeader';
 import StatusChip from '@/components/common/StatusChip';
@@ -21,7 +25,7 @@ export default function StationDetails() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const theme = useTheme();
-  const { stations, sessions, completeSession } = useApp();
+  const { stations, sessions, completeSession, releaseStation, currentUser } = useApp();
 
   const station = stations.find(s => s.id === id);
   if (!station) {
@@ -91,6 +95,7 @@ export default function StationDetails() {
 
         <Grid size={{ xs: 12, md: 7 }}>
           <Card sx={{ p: 3, border: `1px solid ${theme.palette.divider}`, height: '100%' }}>
+            {/* Case 1: Station is actively charging and current user owns this session */}
             {station.status === 'charging' && session ? (
               <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
                 <Box
@@ -151,8 +156,123 @@ export default function StationDetails() {
                   Stop Session
                 </Button>
               </Box>
+            ) : station.status === 'charging' ? (
+              /* Case 2: Station is charging another customer's vehicle */
+              <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 2.5, py: 4, textAlign: 'center' }}>
+                <Box
+                  sx={{
+                    width: 80,
+                    height: 80,
+                    borderRadius: '50%',
+                    bgcolor: alpha(theme.palette.info.main, 0.1),
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <HourglassTopOutlined sx={{ fontSize: 40, color: theme.palette.info.main }} />
+                </Box>
+                <Box>
+                  <Typography variant="h4" fontWeight={700} sx={{ mb: 0.5 }}>Bay Occupied / Charging</Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 400 }}>
+                    This charging bay is currently actively delivering power to vehicle <strong>{station.currentEV || 'in progress'}</strong>.
+                  </Typography>
+                </Box>
+
+                <Box sx={{ display: 'flex', gap: 1.5, mt: 1 }}>
+                  {(currentUser?.role === 'operator' || currentUser?.role === 'admin') ? (
+                    <Button
+                      variant="contained"
+                      color="error"
+                      startIcon={<StopCircleOutlined />}
+                      onClick={async () => {
+                        await releaseStation(station.id);
+                      }}
+                    >
+                      Force Release Bay (Operator)
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="outlined"
+                      color="warning"
+                      onClick={() => navigate('/stations')}
+                    >
+                      Queue for this Bay
+                    </Button>
+                  )}
+                </Box>
+              </Box>
+            ) : station.status === 'maintenance' ? (
+              /* Case 3: Maintenance */
+              <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 2.5, py: 4, textAlign: 'center' }}>
+                <Box
+                  sx={{
+                    width: 80,
+                    height: 80,
+                    borderRadius: '50%',
+                    bgcolor: alpha(theme.palette.warning.main, 0.1),
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <BuildOutlined sx={{ fontSize: 40, color: theme.palette.warning.main }} />
+                </Box>
+                <Box>
+                  <Typography variant="h4" fontWeight={700} sx={{ mb: 0.5 }}>Station Under Maintenance</Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 400 }}>
+                    This bay is temporarily offline for maintenance and technical calibration.
+                  </Typography>
+                </Box>
+                {(currentUser?.role === 'operator' || currentUser?.role === 'admin') && (
+                  <Button
+                    variant="contained"
+                    color="primary"
+                    onClick={async () => {
+                      await releaseStation(station.id);
+                    }}
+                  >
+                    Set Bay Available
+                  </Button>
+                )}
+              </Box>
+            ) : station.status === 'offline' ? (
+              /* Case 4: Offline */
+              <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 2.5, py: 4, textAlign: 'center' }}>
+                <Box
+                  sx={{
+                    width: 80,
+                    height: 80,
+                    borderRadius: '50%',
+                    bgcolor: alpha(theme.palette.error.main, 0.1),
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <PowerOffOutlined sx={{ fontSize: 40, color: theme.palette.error.main }} />
+                </Box>
+                <Box>
+                  <Typography variant="h4" fontWeight={700} sx={{ mb: 0.5 }}>Station Offline</Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 400 }}>
+                    This bay is disconnected from power or grid services.
+                  </Typography>
+                </Box>
+                {(currentUser?.role === 'operator' || currentUser?.role === 'admin') && (
+                  <Button
+                    variant="contained"
+                    color="primary"
+                    onClick={async () => {
+                      await releaseStation(station.id);
+                    }}
+                  >
+                    Set Bay Available
+                  </Button>
+                )}
+              </Box>
             ) : (
-              <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 2, py: 4 }}>
+              /* Case 5: Available */
+              <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 2.5, py: 4, textAlign: 'center' }}>
                 <Box
                   sx={{
                     width: 80,
@@ -164,12 +284,22 @@ export default function StationDetails() {
                     justifyContent: 'center',
                   }}
                 >
-                  <Typography variant="h3" sx={{ color: theme.palette.success.main }}>✓</Typography>
+                  <CheckCircleOutline sx={{ fontSize: 40, color: theme.palette.success.main }} />
                 </Box>
-                <Typography variant="h4">Station Available</Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Ready to accept a charging session.
-                </Typography>
+                <Box>
+                  <Typography variant="h4" fontWeight={700} sx={{ mb: 0.5 }}>Station Available</Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Ready to accept an electric vehicle for charging.
+                  </Typography>
+                </Box>
+                <Button
+                  variant="contained"
+                  color="primary"
+                  startIcon={<ElectricBoltOutlined />}
+                  onClick={() => navigate('/stations')}
+                >
+                  Start Charging Here
+                </Button>
               </Box>
             )}
           </Card>

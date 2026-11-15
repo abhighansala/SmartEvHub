@@ -271,6 +271,12 @@ export const api = {
     });
   },
 
+  async releaseStation(id: string) {
+    return request(`/stations/${id}/release`, {
+      method: 'POST',
+    });
+  },
+
   async completeCharging(stationOrSession: { sessionId?: string; stationId?: string } | string) {
     let body = {};
     if (typeof stationOrSession === 'string') {

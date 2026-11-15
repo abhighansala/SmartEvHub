@@ -1225,6 +1225,32 @@ async function runAllScenarios() {
   console.log('  Testing Assertion 12: Database persistence verification...');
   const dbHealth = await request({ hostname: 'localhost', port: 8080, path: '/api/health', method: 'GET' });
   assert(dbHealth.statusCode === 200, 'Assertion 12: SQLite database backend operational and persistent');
+
+  // Teardown: Clean up ephemeral test sessions and restore test-allocated bays to available
+  console.log('  Teardown: Releasing test-allocated stations...');
+  try {
+    const activeSessRes = await request({
+      hostname: 'localhost',
+      port: 8080,
+      path: '/api/sessions',
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${operatorToken}` }
+    });
+    const sList = Array.isArray(activeSessRes.data) ? activeSessRes.data : (activeSessRes.data.sessions || []);
+    for (const s of sList) {
+      if (s.stationId !== 'CS-1') {
+        await request({
+          hostname: 'localhost',
+          port: 8080,
+          path: `/api/stations/${s.stationId}/release`,
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${operatorToken}` }
+        });
+      }
+    }
+  } catch (err) {
+    console.log('  Notice: Post-test session teardown encountered non-critical issue:', err.message);
+  }
   }
 
   console.log('\n================================================================');

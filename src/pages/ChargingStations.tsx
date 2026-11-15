@@ -34,7 +34,7 @@ import type { Station } from '@/types';
 export default function ChargingStations() {
   const theme = useTheme();
   const navigate = useNavigate();
-  const { stations, evs, currentUser, refreshBackendData, showSnackbar } = useApp();
+  const { stations, evs, currentUser, refreshBackendData, showSnackbar, releaseStation } = useApp();
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selectedStation, setSelectedStation] = useState<Station | null>(null);
@@ -185,45 +185,63 @@ export default function ChargingStations() {
                 <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
                   <Typography variant="body2" color="text.secondary">Current EV</Typography>
                   <Typography variant="body2" fontWeight={500}>
-                    {station.currentEV || 'None (Available)'}
+                    {station.status === 'available'
+                      ? 'None (Available)'
+                      : (station.currentEV || (station.status === 'charging' ? 'Occupied' : 'None'))}
                   </Typography>
                 </Box>
               </Box>
 
-              <Box sx={{ mt: 2, pt: 2, borderTop: `1px solid ${theme.palette.divider}`, display: 'flex', gap: 1 }}>
-                <Button
-                  size="small"
-                  startIcon={<VisibilityOutlined />}
-                  onClick={(e) => { e.stopPropagation(); navigate(`/stations/${station.id}`); }}
-                  fullWidth
-                >
-                  View Details
-                </Button>
-                {station.status === 'available' ? (
+              <Box sx={{ mt: 2, pt: 2, borderTop: `1px solid ${theme.palette.divider}`, display: 'flex', gap: 1, flexDirection: 'column' }}>
+                <Box sx={{ display: 'flex', gap: 1 }}>
                   <Button
                     size="small"
-                    variant="contained"
-                    startIcon={<ElectricBoltOutlined />}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      openRequestModal(station);
-                    }}
+                    startIcon={<VisibilityOutlined />}
+                    onClick={(e) => { e.stopPropagation(); navigate(`/stations/${station.id}`); }}
                     fullWidth
                   >
-                    Charge Here
+                    View Details
                   </Button>
-                ) : (
+                  {station.status === 'available' ? (
+                    <Button
+                      size="small"
+                      variant="contained"
+                      startIcon={<ElectricBoltOutlined />}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openRequestModal(station);
+                      }}
+                      fullWidth
+                    >
+                      Charge Here
+                    </Button>
+                  ) : (
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      color="warning"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openRequestModal(station);
+                      }}
+                      fullWidth
+                    >
+                      Queue Bay
+                    </Button>
+                  )}
+                </Box>
+                {(currentUser?.role === 'operator' || currentUser?.role === 'admin') && station.status !== 'available' && (
                   <Button
                     size="small"
-                    variant="outlined"
-                    color="warning"
-                    onClick={(e) => {
+                    variant="text"
+                    color="error"
+                    onClick={async (e) => {
                       e.stopPropagation();
-                      openRequestModal(station);
+                      await releaseStation(station.id);
                     }}
                     fullWidth
                   >
-                    Queue Bay
+                    Release Bay (Reset to Available)
                   </Button>
                 )}
               </Box>

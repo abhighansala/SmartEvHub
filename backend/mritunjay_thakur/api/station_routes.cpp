@@ -76,4 +76,19 @@ void registerStationRoutes(crow::App<crow::CORSHandler>& app, StationService& st
             return crow::response(404, res);
         }
     });
+
+    // POST /api/stations/<string>/release - Release a charging station back to available
+    CROW_ROUTE(app, "/api/stations/<string>/release").methods(crow::HTTPMethod::POST)
+    ([&stationService](const crow::request& req, std::string id){
+        crow::json::wvalue res;
+        if (stationService.updateStationStatus(id, "available")) {
+            res["success"] = true;
+            res["message"] = "Station " + id + " released and set to available";
+            return crow::response(200, res);
+        } else {
+            res["success"] = false;
+            res["message"] = "Failed to release station " + id;
+            return crow::response(400, res);
+        }
+    });
 }

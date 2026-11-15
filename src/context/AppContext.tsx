@@ -59,6 +59,7 @@ interface AppContextType {
 
   // Station operations (Optimistic with Rollback)
   updateStation: (id: string, data: Partial<Station>) => Promise<void>;
+  releaseStation: (stationId: string) => Promise<boolean>;
 
   // Battery operations (Optimistic with Rollback)
   addBattery: (battery: Omit<Battery, 'lastUpdated'>) => Promise<void>;
@@ -365,6 +366,59 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(interval);
   }, [refreshBackendData, currentUser]);
 
+
+  // ─── Sessions & Transactions (LIFO Stack - Abhishek DSA) ──
+  const completeSession = useCallback(async (sessionId: string) => {
+    const session = sessions.find(s => s.id === sessionId);
+    if (!session) return null;
+
+    if (isBackendOnline) {
+      try {
+        const res = await api.completeCharging(session.stationId);
+        if (res && res.success) {
+          showSnackbar(res.message || `Charging session for ${session.evId} completed — ₹${res.amount?.toFixed(2)}`, 'success');
+          await refreshBackendData();
+          return res;
+        } else {
+          showSnackbar(res?.message || 'Failed to complete charging session on backend', 'error');
+          return null;
+        }
+      } catch (e: any) {
+        showSnackbar(e.message || 'Failed to complete charging session on backend', 'error');
+        return null;
+      }
+    }
+
+    // Fallback mode if backend offline
+    setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, status: 'completed' as const, endTime: new Date().toISOString() } : s));
+    setStations(prev => prev.map(s =>
+      s.id === session.stationId
+        ? { ...s, status: 'available' as const, currentEV: null, sessionStart: null }
+        : s
+    ));
+    setEVs(prev => prev.map(ev =>
+      ev.id === session.evId
+        ? { ...ev, status: 'available' as const, currentCharge: session.targetCharge, lastActivity: new Date().toISOString() }
+        : ev
+    ));
+
+    const txnId = nextId('TXN');
+    const txn: Transaction = {
+      id: txnId,
+      evId: session.evId,
+      type: 'charging',
+      stationOrBattery: session.stationId,
+      date: new Date().toISOString(),
+      amount: session.estimatedCost,
+      energyDelivered: Math.round((session.targetCharge - session.batteryStart) * 0.4 * 10) / 10,
+      duration: Math.round((Date.now() - new Date(session.startTime).getTime()) / 60000),
+      status: 'completed',
+    };
+    setTransactions(prev => [txn, ...prev]);
+    showSnackbar(`Charging session for ${session.evId} completed — ₹${session.estimatedCost.toFixed(2)}`);
+    return txn;
+  }, [sessions, isBackendOnline, refreshBackendData, showSnackbar]);
+
   // ─── Live Charging Simulation Engine ─────────────────────
   useEffect(() => {
     const hasActiveSessions = sessions.some(s => s.status === 'active');
@@ -389,6 +443,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
               ev.id === session.evId ? { ...ev, currentCharge: nextSoC } : ev
             ));
 
+            if (nextSoC >= session.targetCharge) {
+              // Auto-complete session once target SoC is reached to release bay
+              setTimeout(() => {
+                completeSession(session.id);
+              }, 1200);
+            }
+
             return {
               ...session,
               batteryEnd: nextSoC,
@@ -403,7 +464,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }, 3000);
 
     return () => clearInterval(interval);
-  }, [sessions, stations]);
+  }, [sessions, stations, completeSession]);
 
   // ─── EV CRUD with Optimistic UI & Automatic Rollback ─────
   const addEV = useCallback(async (ev: Omit<EV, 'lastActivity' | 'registeredAt'>): Promise<boolean> => {
@@ -493,6 +554,32 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     }
   }, [stations, isBackendOnline, showSnackbar]);
+
+  // ─── Station Release / Reset (Operator & Recovery) ────────
+  const releaseStation = useCallback(async (stationId: string): Promise<boolean> => {
+    if (isBackendOnline) {
+      try {
+        const res = await api.releaseStation(stationId);
+        if (res && res.success) {
+          showSnackbar(res.message || `Station ${stationId} released back to available`, 'success');
+          await refreshBackendData();
+          return true;
+        } else {
+          await api.updateStationStatus(stationId, 'available');
+          showSnackbar(`Station ${stationId} status updated to available`, 'success');
+          await refreshBackendData();
+          return true;
+        }
+      } catch (e: any) {
+        showSnackbar(`Failed to release station: ${e.message}`, 'error');
+        return false;
+      }
+    } else {
+      setStations(prev => prev.map(s => s.id === stationId ? { ...s, status: 'available' as const, currentEV: null, sessionStart: null } : s));
+      showSnackbar(`Station ${stationId} set to available (Offline Mode)`, 'info');
+      return true;
+    }
+  }, [isBackendOnline, refreshBackendData, showSnackbar]);
 
   // ─── Battery with Optimistic UI & Automatic Rollback ──────
   const addBattery = useCallback(async (battery: Omit<Battery, 'lastUpdated'>) => {
@@ -784,57 +871,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     showSnackbar(`${req.evId} added to Swap Queue (REAR)`);
   }, [isBackendOnline, refreshBackendData, showSnackbar]);
 
-  // ─── Sessions & Transactions (LIFO Stack - Abhishek DSA) ──
-  const completeSession = useCallback(async (sessionId: string) => {
-    const session = sessions.find(s => s.id === sessionId);
-    if (!session) return null;
-
-    if (isBackendOnline) {
-      try {
-        const res = await api.completeCharging(session.stationId);
-        if (res && res.success) {
-          showSnackbar(res.message || `Charging session for ${session.evId} completed — ₹${res.amount?.toFixed(2)}`, 'success');
-          await refreshBackendData();
-          return res;
-        } else {
-          showSnackbar(res?.message || 'Failed to complete charging session on backend', 'error');
-          return null;
-        }
-      } catch (e: any) {
-        showSnackbar(e.message || 'Failed to complete charging session on backend', 'error');
-        return null;
-      }
-    }
-
-    // Fallback mode if backend offline
-    setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, status: 'completed' as const, endTime: new Date().toISOString() } : s));
-    setStations(prev => prev.map(s =>
-      s.id === session.stationId
-        ? { ...s, status: 'available' as const, currentEV: null, sessionStart: null }
-        : s
-    ));
-    setEVs(prev => prev.map(ev =>
-      ev.id === session.evId
-        ? { ...ev, status: 'available' as const, currentCharge: session.targetCharge, lastActivity: new Date().toISOString() }
-        : ev
-    ));
-
-    const txnId = nextId('TXN');
-    const txn: Transaction = {
-      id: txnId,
-      evId: session.evId,
-      type: 'charging',
-      stationOrBattery: session.stationId,
-      date: new Date().toISOString(),
-      amount: session.estimatedCost,
-      energyDelivered: Math.round((session.targetCharge - session.batteryStart) * 0.4 * 10) / 10,
-      duration: Math.round((Date.now() - new Date(session.startTime).getTime()) / 60000),
-      status: 'completed',
-    };
-    setTransactions(prev => [txn, ...prev]);
-    showSnackbar(`Charging session for ${session.evId} completed — ₹${session.estimatedCost.toFixed(2)}`);
-    return txn;
-  }, [sessions, isBackendOnline, refreshBackendData, showSnackbar]);
 
   // ─── Notifications ───────────────────────────────────────
   const markNotificationRead = useCallback((id: string) => {
@@ -881,7 +917,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       refreshBackendData,
       isAuthenticated, currentUser, login, logout,
       addEV, updateEV, deleteEV,
-      updateStation,
+      updateStation, releaseStation,
       addBattery, updateBattery,
       processNextCharging, removeChargingRequest, addChargingRequest,
       chargingRequests, cancelChargingRequest, allocateBayManually,

@@ -130,6 +130,12 @@ void StationService::ensureSchemaMigrations() {
     // Backfill user_id in ChargingSession and TransactionLog from EV table if null
     sqlite3_exec(handle, "UPDATE ChargingSession SET user_id = (SELECT user_id FROM EV WHERE EV.id = ChargingSession.vehicle_id) WHERE user_id IS NULL;", nullptr, nullptr, nullptr);
     sqlite3_exec(handle, "UPDATE TransactionLog SET user_id = (SELECT user_id FROM EV WHERE EV.id = TransactionLog.vehicle_id) WHERE user_id IS NULL;", nullptr, nullptr, nullptr);
+
+    // Reconcile orphan charging stations: if status is 'charging' but current_vehicle_id is null or empty, reset to 'available'
+    sqlite3_exec(handle,
+        "UPDATE ChargingStation SET status = 'available', current_vehicle_id = NULL, session_start = NULL, available_ports = 1 "
+        "WHERE status = 'charging' AND (current_vehicle_id IS NULL OR current_vehicle_id = '');",
+        nullptr, nullptr, nullptr);
 }
 
 int StationService::getAllStations(ChargingStation outList[], int maxCapacity) {
@@ -194,12 +200,46 @@ bool StationService::updateStationStatus(const std::string& id, const std::strin
     bool dbUpdated = false;
     if (db != nullptr && db->isOpen()) {
         sqlite3* handle = db->getDbHandle();
-        std::string sql = "UPDATE ChargingStation SET status = ?, available_ports = (CASE WHEN ? = 'available' THEN 1 ELSE 0 END) WHERE id = ?;";
+        std::string sql;
+        if (newStatus == "available") {
+            // Free the occupying EV and complete active session if any
+            std::string freeEvSql = "UPDATE EV SET status = 'available', last_activity = datetime('now') "
+                                    "WHERE id = (SELECT current_vehicle_id FROM ChargingStation WHERE id = ?);";
+            sqlite3_stmt* feStmt = nullptr;
+            if (sqlite3_prepare_v2(handle, freeEvSql.c_str(), -1, &feStmt, nullptr) == SQLITE_OK) {
+                sqlite3_bind_text(feStmt, 1, id.c_str(), -1, SQLITE_STATIC);
+                sqlite3_step(feStmt);
+                sqlite3_finalize(feStmt);
+            }
+
+            std::string endSesSql = "UPDATE ChargingSession SET status = 'completed', end_time = datetime('now') "
+                                    "WHERE station_id = ? AND status = 'active';";
+            sqlite3_stmt* esStmt = nullptr;
+            if (sqlite3_prepare_v2(handle, endSesSql.c_str(), -1, &esStmt, nullptr) == SQLITE_OK) {
+                sqlite3_bind_text(esStmt, 1, id.c_str(), -1, SQLITE_STATIC);
+                sqlite3_step(esStmt);
+                sqlite3_finalize(esStmt);
+            }
+
+            sql = "UPDATE ChargingStation SET status = 'available', current_vehicle_id = NULL, session_start = NULL, available_ports = 1 WHERE id = ?;";
+        } else if (newStatus == "maintenance" || newStatus == "offline") {
+            sql = "UPDATE ChargingStation SET status = ?, current_vehicle_id = NULL, session_start = NULL, available_ports = 0 WHERE id = ?;";
+        } else {
+            sql = "UPDATE ChargingStation SET status = ?, available_ports = (CASE WHEN ? = 'available' THEN 1 ELSE 0 END) WHERE id = ?;";
+        }
+
         sqlite3_stmt* stmt = nullptr;
         if (sqlite3_prepare_v2(handle, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
-            sqlite3_bind_text(stmt, 1, newStatus.c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_text(stmt, 2, newStatus.c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_text(stmt, 3, id.c_str(), -1, SQLITE_STATIC);
+            if (newStatus == "available") {
+                sqlite3_bind_text(stmt, 1, id.c_str(), -1, SQLITE_STATIC);
+            } else if (newStatus == "maintenance" || newStatus == "offline") {
+                sqlite3_bind_text(stmt, 1, newStatus.c_str(), -1, SQLITE_STATIC);
+                sqlite3_bind_text(stmt, 2, id.c_str(), -1, SQLITE_STATIC);
+            } else {
+                sqlite3_bind_text(stmt, 1, newStatus.c_str(), -1, SQLITE_STATIC);
+                sqlite3_bind_text(stmt, 2, newStatus.c_str(), -1, SQLITE_STATIC);
+                sqlite3_bind_text(stmt, 3, id.c_str(), -1, SQLITE_STATIC);
+            }
             int rc = sqlite3_step(stmt);
             sqlite3_finalize(stmt);
             if (rc == SQLITE_DONE && sqlite3_changes(handle) > 0) {
@@ -211,8 +251,9 @@ bool StationService::updateStationStatus(const std::string& id, const std::strin
     for (int i = 0; i < stationCount; i++) {
         if (stationArray[i].getId() == id) {
             stationArray[i].setStatus(newStatus);
-            if (newStatus == "available") {
+            if (newStatus == "available" || newStatus == "maintenance" || newStatus == "offline") {
                 stationArray[i].setCurrentVehicleId("");
+                stationArray[i].setSessionStart("");
             }
             dbUpdated = true;
             break;
