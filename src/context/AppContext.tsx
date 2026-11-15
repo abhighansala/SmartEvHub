@@ -173,6 +173,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setCurrentUser(null);
     localStorage.removeItem('currentUser');
     localStorage.removeItem('authToken');
+    setEVs([]);
     showSnackbar('Logged out successfully', 'info');
   }, [isBackendOnline, showSnackbar]);
 
@@ -182,6 +183,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setCurrentUser(null);
       localStorage.removeItem('currentUser');
       localStorage.removeItem('authToken');
+      setEVs([]);
       showSnackbar('Your session has expired. Please sign in again.', 'warning');
     };
     window.addEventListener('evhub-auth-expired', handleExpired);
@@ -310,7 +312,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     refreshBackendData();
-  }, [refreshBackendData]);
+  }, [refreshBackendData, currentUser]);
 
   // ─── Live Charging Simulation Engine ─────────────────────
   useEffect(() => {
