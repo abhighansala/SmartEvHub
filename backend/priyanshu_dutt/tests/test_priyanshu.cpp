@@ -8,6 +8,7 @@
 // Comprehensive Unit & Persistence Test Suite for Priyanshu Dutt's Module
 // Role: EV Management Module Owner
 // Student ID: 2519460 (ML3)
+// Enhanced for User Data Isolation & Ownership Enforcement
 int main() {
     std::cout << "========================================================\n";
     std::cout << " Running Tests: Priyanshu Dutt (EV Management Module)\n";
@@ -195,6 +196,88 @@ int main() {
     assert(restartedService.getEVById("EV-201", postDeleteEV) == false);
     std::cout << "  [PASS] Test 20: EV-201 deleted from SQLite and confirmed absent.\n";
 
+    // =========================================================================
+    // SECTION 3: USER DATA ISOLATION & ROLE-BASED OWNERSHIP TESTS
+    // =========================================================================
+    std::cout << "\n--- [SECTION 3] User Data Isolation & Ownership Tests ---\n";
+
+    // Test 21: Verify Seed EV User ID Mapping
+    // User 9 (Rahul Sharma) -> EV-101
+    // User 10 (Priya Patel) -> EV-102
+    // User 11 (Vikram Malhotra) -> EV-103, EV-125
+    EV user9EVs[MAX_EVS];
+    int user9Count = restartedService.getAllEVs(user9EVs, MAX_EVS, 9);
+    assert(user9Count == 1 && "User 9 (Rahul Sharma) must own exactly 1 EV");
+    assert(user9EVs[0].getId() == "EV-101");
+    assert(user9EVs[0].getUserId() == 9);
+    std::cout << "  [PASS] Test 21: Seed EV user mapping verified (User 9 owns EV-101).\n";
+
+    // Test 22: Multi-Vehicle Ownership for User 11 (Vikram Malhotra)
+    EV user11EVs[MAX_EVS];
+    int user11Count = restartedService.getAllEVs(user11EVs, MAX_EVS, 11);
+    assert(user11Count == 2 && "User 11 (Vikram Malhotra) must own exactly 2 EVs (EV-103, EV-125)");
+    std::cout << "  [PASS] Test 22: Multi-vehicle query for User 11 verified (found 2 EVs).\n";
+
+    // Test 23: Data Isolation - User 15 (Krishna Kumar) has NO vehicles initially
+    EV user15EVs[MAX_EVS];
+    int user15Count = restartedService.getAllEVs(user15EVs, MAX_EVS, 15);
+    assert(user15Count == 0 && "User 15 (Krishna Kumar) must have 0 EVs initially (no leakage from other users)");
+    std::cout << "  [PASS] Test 23: Data isolation verified (User 15 sees 0 EVs, no leakage from Rahul/Vikram/Priya).\n";
+
+    // Test 24: Unfiltered Query (Admin / Operator view with userId = 0)
+    EV allEVs[MAX_EVS];
+    int allCount = restartedService.getAllEVs(allEVs, MAX_EVS, 0);
+    assert(allCount == 7 && "Admin/Operator unfiltered query must retrieve all 7 seed EVs");
+    std::cout << "  [PASS] Test 24: Unfiltered query for Admin/Operator retrieved all " << allCount << " EVs.\n";
+
+    // Test 25: Create EV Associated with User ID
+    EV user15NewEV("EV-KRISHNA-1", "Krishna Kumar", "MG Comet EV", 17.3, 85.0, "available", "", "", 15);
+    std::string userErr;
+    assert(restartedService.createEV(user15NewEV, userErr) == true);
+    EV retrievedKrishna;
+    assert(restartedService.getEVById("EV-KRISHNA-1", retrievedKrishna) == true);
+    assert(retrievedKrishna.getUserId() == 15);
+
+    // Verify Krishna now sees exactly 1 EV
+    user15Count = restartedService.getAllEVs(user15EVs, MAX_EVS, 15);
+    assert(user15Count == 1 && "User 15 must now see exactly 1 EV");
+    assert(user15EVs[0].getId() == "EV-KRISHNA-1");
+    std::cout << "  [PASS] Test 25: Created EV bound to User 15 and isolated from other users.\n";
+
+    // Test 26: Ownership Access Check (checkOwnership)
+    // Krishna Kumar (user 15) accessing own EV -> true
+    assert(restartedService.checkOwnership("EV-KRISHNA-1", 15, "user", userErr) == true);
+    // Krishna Kumar (user 15) attempting to access Rahul Sharma's EV-101 -> false
+    assert(restartedService.checkOwnership("EV-101", 15, "user", userErr) == false);
+    assert(userErr.find("Access forbidden") != std::string::npos);
+    // Operator (role="operator") accessing Rahul Sharma's EV-101 -> true
+    assert(restartedService.checkOwnership("EV-101", 2, "operator", userErr) == true);
+    // Admin (role="admin") accessing Krishna's EV-KRISHNA-1 -> true
+    assert(restartedService.checkOwnership("EV-KRISHNA-1", 1, "admin", userErr) == true);
+    std::cout << "  [PASS] Test 26: Ownership check verified (owner allowed, unauthorized user denied, operator/admin granted).\n";
+
+    // Test 27: Ownership Enforced Update (updateEVForUser)
+    retrievedKrishna.setCurrentCharge(92.0);
+    // Unauthorized user 9 attempts to update Krishna's EV -> must fail
+    assert(restartedService.updateEVForUser("EV-KRISHNA-1", retrievedKrishna, 9, "user", userErr) == false);
+    assert(userErr.find("Access forbidden") != std::string::npos);
+    // Owner user 15 updates their own EV -> must succeed
+    assert(restartedService.updateEVForUser("EV-KRISHNA-1", retrievedKrishna, 15, "user", userErr) == true);
+    EV checkUpdated;
+    assert(restartedService.getEVById("EV-KRISHNA-1", checkUpdated) == true);
+    assert(checkUpdated.getCurrentCharge() == 92.0);
+    std::cout << "  [PASS] Test 27: Ownership-enforced update verified (unauthorized update rejected, owner update accepted).\n";
+
+    // Test 28: Ownership Enforced Delete (deleteEVForUser)
+    // Unauthorized user 9 attempts to delete Krishna's EV -> must fail
+    assert(restartedService.deleteEVForUser("EV-KRISHNA-1", 9, "user", userErr) == false);
+    assert(userErr.find("Access forbidden") != std::string::npos);
+    // Owner user 15 deletes their own EV -> must succeed
+    assert(restartedService.deleteEVForUser("EV-KRISHNA-1", 15, "user", userErr) == true);
+    EV checkDeleted;
+    assert(restartedService.getEVById("EV-KRISHNA-1", checkDeleted) == false);
+    std::cout << "  [PASS] Test 28: Ownership-enforced delete verified (unauthorized delete rejected, owner delete accepted).\n";
+
     // Cleanup temporary test database file
     restartDb.close();
     std::remove(testDbFile.c_str());
@@ -202,7 +285,7 @@ int main() {
     std::remove((testDbFile + "-shm").c_str());
 
     std::cout << "\n========================================================\n";
-    std::cout << " >>> ALL 20 TESTS PASSED FOR PRIYANSHU DUTT (EV MODULE)! <<<\n";
+    std::cout << " >>> ALL 28 TESTS PASSED FOR PRIYANSHU DUTT (EV MODULE)! <<<\n";
     std::cout << "========================================================\n";
     return 0;
 }

@@ -51,6 +51,9 @@ public:
 
     // Check if vehicleId is already waiting in queue
     bool contains(const std::string& vehicleId) const;
+
+    // Remove specific vehicleId from queue (shifts subsequent items preserving FIFO order)
+    bool remove(const std::string& vehicleId);
 };
 
 #endif

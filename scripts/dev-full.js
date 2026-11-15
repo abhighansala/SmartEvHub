@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import readline from 'readline';
 import { fileURLToPath } from 'url';
+import { ensureBackendBuilt } from './ensure-backend.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -44,17 +45,8 @@ if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
   console.log(`${YELLOW}[Runner] Configured default 64-char development JWT_SECRET.${RESET}`);
 }
 
-// 3. Ensure backend executable exists
-const exePath = path.join(rootDir, 'backend', 'build', process.platform === 'win32' ? 'smart_ev_hub_backend.exe' : 'smart_ev_hub_backend');
-if (!fs.existsSync(exePath)) {
-  console.log(`${YELLOW}[Runner] Backend executable not found. Compiling backend with CMake...${RESET}`);
-  try {
-    execSync('cmake --build backend/build', { cwd: rootDir, stdio: 'inherit' });
-  } catch (err) {
-    console.error(`[Runner] Backend compilation failed:`, err.message);
-    process.exit(1);
-  }
-}
+// 3. Ensure backend executable exists (with automated CMake configuration guard)
+const exePath = ensureBackendBuilt(rootDir);
 
 // Helper to prefix child stream
 function prefixStream(stream, prefix) {

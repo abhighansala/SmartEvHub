@@ -48,6 +48,32 @@ interface NavGroup {
   items: NavItem[];
 }
 
+const userNavGroups: NavGroup[] = [
+  {
+    title: '',
+    items: [
+      { label: 'Dashboard', path: '/dashboard', icon: <DashboardOutlined /> },
+    ],
+  },
+  {
+    title: 'My EV Services',
+    items: [
+      { label: 'My Vehicles', path: '/evs', icon: <DirectionsCarOutlined /> },
+      { label: 'Charging Stations', path: '/stations', icon: <EvStationOutlined /> },
+      { label: 'Active Sessions', path: '/sessions', icon: <ElectricBoltOutlined /> },
+      { label: 'Charging Queue', path: '/charging-queue', icon: <FormatListNumberedOutlined /> },
+      { label: 'Battery Swap', path: '/battery-swap', icon: <SwapHorizOutlined /> },
+    ],
+  },
+  {
+    title: 'Account & Billing',
+    items: [
+      { label: 'My Transactions', path: '/transactions', icon: <ReceiptLongOutlined /> },
+      { label: 'Settings', path: '/settings', icon: <SettingsOutlined /> },
+    ],
+  },
+];
+
 const navGroups: NavGroup[] = [
   {
     title: '',
@@ -101,7 +127,9 @@ export default function Sidebar({ open, collapsed, onToggleCollapse, onClose }: 
   const location = useLocation();
   const { settings, isAuthenticated, currentUser, logout } = useApp();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
-  const isUserLoggedIn = false;
+  const isUserLoggedIn = isAuthenticated;
+  const isUserRole = currentUser?.role === 'user';
+  const effectiveNavGroups = isUserRole ? userNavGroups : navGroups;
 
   const width = collapsed && !isMobile ? COLLAPSED_WIDTH : EXPANDED_WIDTH;
   const isExpanded = isMobile || !collapsed;
@@ -196,7 +224,7 @@ export default function Sidebar({ open, collapsed, onToggleCollapse, onClose }: 
 
       {/* Navigation */}
       <Box sx={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', py: 2 }}>
-        {navGroups.map((group, gi) => (
+        {effectiveNavGroups.map((group, gi) => (
           <Box key={gi} sx={{ mt: gi > 0 ? 2 : 0 }}>
             {group.title && (
               <Box

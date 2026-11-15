@@ -216,7 +216,7 @@ export const api = {
     });
   },
 
-  // 6. Charging Stations (Mritunjay Thakur module)
+  // 6. Charging Stations & Customer Requests (Mritunjay Thakur module)
   async getStations() {
     return request('/stations');
   },
@@ -226,10 +226,41 @@ export const api = {
     return request(`/sessions${query}`);
   },
 
-  async requestCharging(evId: string, targetCharge: number = 85.0) {
+  async getSessionDetails(sessionId: string) {
+    return request(`/sessions/${sessionId}`);
+  },
+
+  async getChargingRequests() {
+    return request('/charging/requests');
+  },
+
+  async requestCharging(data: { evId: string; stationId?: string; targetCharge?: number } | string, targetCharge: number = 85.0) {
+    let payload: any = {};
+    if (typeof data === 'string') {
+      payload = { evId: data, targetCharge };
+    } else {
+      payload = {
+        evId: data.evId,
+        stationId: data.stationId,
+        targetCharge: data.targetCharge || 85.0,
+      };
+    }
     return request('/charging/request', {
       method: 'POST',
-      body: JSON.stringify({ evId, targetCharge }),
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async cancelChargingRequest(requestId: string) {
+    return request('/charging/request/' + encodeURIComponent(requestId) + '/cancel', {
+      method: 'POST',
+    });
+  },
+
+  async allocateBayManually(requestId: string, stationId: string) {
+    return request('/charging/allocate', {
+      method: 'POST',
+      body: JSON.stringify({ requestId, stationId }),
     });
   },
 
@@ -240,10 +271,20 @@ export const api = {
     });
   },
 
-  async completeCharging(stationId: string) {
+  async completeCharging(stationOrSession: { sessionId?: string; stationId?: string } | string) {
+    let body = {};
+    if (typeof stationOrSession === 'string') {
+      if (stationOrSession.startsWith('SES-')) {
+        body = { sessionId: stationOrSession };
+      } else {
+        body = { stationId: stationOrSession };
+      }
+    } else {
+      body = stationOrSession;
+    }
     return request('/charging/complete', {
       method: 'POST',
-      body: JSON.stringify({ stationId }),
+      body: JSON.stringify(body),
     });
   },
 
@@ -288,6 +329,10 @@ export const api = {
   async getTransactions(type?: string) {
     const query = type ? `?type=${encodeURIComponent(type)}` : '';
     return request(`/transactions${query}`);
+  },
+
+  async getTransactionById(id: string) {
+    return request(`/transactions/${id}`);
   },
 
   async createTransaction(txn: any) {

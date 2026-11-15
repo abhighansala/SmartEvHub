@@ -141,7 +141,7 @@ int main(int argc, char* argv[])
     registerChargingRoutes(app, stationService, chargingQueue, &txnStack);
     registerBatteryRoutes(app, batteryService, &swapQueue, &txnStack);
     registerSwapRoutes(app, batteryService, swapQueue, &txnStack);
-    registerDSARoutes(app, chargingQueue, swapQueue, txnStack);
+    registerDSARoutes(app, chargingQueue, swapQueue, txnStack, &stationService, &db);
     registerTransactionRoutes(app, txnService);
     registerAnalyticsRoutes(app, txnService);
 

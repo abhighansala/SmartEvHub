@@ -27,6 +27,58 @@ TransactionService::TransactionService(Database* database) {
     transactionCount = 4;
 }
 
+int TransactionService::getUserTransactions(Transaction outList[], int maxCapacity, int userId) {
+    if (userId <= 0) {
+        return getAllTransactions(outList, maxCapacity);
+    }
+    int count = 0;
+    if (db != nullptr && db->isOpen()) {
+        sqlite3* handle = db->getDbHandle();
+        std::string sql = "SELECT id, vehicle_id, type, station_or_battery, description, "
+                          "amount, energy_delivered, duration, timestamp, status, user_id, session_id "
+                          "FROM TransactionLog "
+                          "WHERE user_id = ? OR vehicle_id IN (SELECT id FROM EV WHERE user_id = ?) "
+                          "ORDER BY timestamp DESC;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(handle, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_int(stmt, 1, userId);
+            sqlite3_bind_int(stmt, 2, userId);
+            while (sqlite3_step(stmt) == SQLITE_ROW && count < maxCapacity) {
+                const char* idText   = (const char*)sqlite3_column_text(stmt, 0);
+                const char* vIdText  = (const char*)sqlite3_column_text(stmt, 1);
+                const char* typeText = (const char*)sqlite3_column_text(stmt, 2);
+                const char* tgtText  = (const char*)sqlite3_column_text(stmt, 3);
+                const char* descText = (const char*)sqlite3_column_text(stmt, 4);
+                double amount        = sqlite3_column_double(stmt, 5);
+                double energy        = sqlite3_column_double(stmt, 6);
+                int duration         = sqlite3_column_int(stmt, 7);
+                const char* timeText = (const char*)sqlite3_column_text(stmt, 8);
+                const char* statText = (const char*)sqlite3_column_text(stmt, 9);
+                int uId              = sqlite3_column_int(stmt, 10);
+                const char* sesText  = (const char*)sqlite3_column_text(stmt, 11);
+
+                outList[count++] = Transaction(idText ? idText : "",
+                                               vIdText ? vIdText : "",
+                                               typeText ? typeText : "charging",
+                                               tgtText ? tgtText : "",
+                                               descText ? descText : "",
+                                               amount, energy, duration,
+                                               timeText ? timeText : "",
+                                               statText ? statText : "completed",
+                                               uId, sesText ? sesText : "");
+            }
+            sqlite3_finalize(stmt);
+            return count;
+        }
+    }
+    for (int i = 0; i < transactionCount && count < maxCapacity; i++) {
+        if (transactionArray[i].getUserId() == userId) {
+            outList[count++] = transactionArray[i];
+        }
+    }
+    return count;
+}
+
 int TransactionService::getAllTransactions(Transaction outList[], int maxCapacity) {
     int count = 0;
 
@@ -103,9 +155,10 @@ bool TransactionService::addTransaction(const Transaction& txn) {
     if (db != nullptr && db->isOpen()) {
         sqlite3* handle = db->getDbHandle();
         std::string sql = "INSERT INTO TransactionLog (id, vehicle_id, type, station_or_battery, "
-                          "description, amount, energy_delivered, duration, timestamp, status) "
+                          "description, amount, energy_delivered, duration, timestamp, status, user_id, session_id) "
                           "VALUES (?, ?, ?, ?, ?, ?, ?, ?, "
-                          "CASE WHEN ? != '' THEN ? ELSE datetime('now') END, ?);";
+                          "CASE WHEN ? != '' THEN ? ELSE datetime('now') END, ?, "
+                          "CASE WHEN ? > 0 THEN ? ELSE (SELECT user_id FROM EV WHERE id = ?) END, ?);";
         sqlite3_stmt* stmt = nullptr;
 
         if (sqlite3_prepare_v2(handle, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
@@ -120,6 +173,10 @@ bool TransactionService::addTransaction(const Transaction& txn) {
             sqlite3_bind_text(stmt, 9, txn.getTimestamp().c_str(), -1, SQLITE_STATIC);
             sqlite3_bind_text(stmt, 10, txn.getTimestamp().c_str(), -1, SQLITE_STATIC);
             sqlite3_bind_text(stmt, 11, txn.getStatus().c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_int(stmt, 12, txn.getUserId());
+            sqlite3_bind_int(stmt, 13, txn.getUserId());
+            sqlite3_bind_text(stmt, 14, txn.getVehicleId().c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 15, txn.getSessionId().c_str(), -1, SQLITE_STATIC);
 
             int rc = sqlite3_step(stmt);
             sqlite3_finalize(stmt);
