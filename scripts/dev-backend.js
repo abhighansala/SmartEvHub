@@ -2,6 +2,7 @@ import { spawn, execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { ensureBackendBuilt } from './ensure-backend.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -30,31 +31,8 @@ if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
   process.env.JWT_SECRET = 'SmartEvHub_LocalDev_SecretKey_Minimum_32_Characters_2026_Secure!';
 }
 
-// 3. Ensure executable exists
-const exePath = path.join(rootDir, 'backend', 'build', process.platform === 'win32' ? 'smart_ev_hub_backend.exe' : 'smart_ev_hub_backend');
-const cachePath = path.join(rootDir, 'backend', 'build', 'CMakeCache.txt');
-if (!fs.existsSync(exePath)) {
-  console.log('[Dev] Backend executable not found.');
-  if (!fs.existsSync(cachePath)) {
-    console.log('[Dev] CMake build tree not configured. Running initial CMake configure...');
-    const configureCmd = process.platform === 'win32'
-      ? 'cmake -B backend/build -S backend -G "MinGW Makefiles"'
-      : 'cmake -B backend/build -S backend';
-    try {
-      execSync(configureCmd, { cwd: rootDir, stdio: 'inherit' });
-    } catch {
-      console.log('[Dev] Note: MinGW generator configure failed, trying default generator...');
-      execSync('cmake -B backend/build -S backend', { cwd: rootDir, stdio: 'inherit' });
-    }
-  }
-  console.log('[Dev] Compiling backend with CMake...');
-  try {
-    execSync('cmake --build backend/build', { cwd: rootDir, stdio: 'inherit' });
-  } catch (err) {
-    console.error('[Dev] Backend compilation failed:', err.message);
-    process.exit(1);
-  }
-}
+// 3. Ensure executable exists (with automated CMake configuration guard)
+const exePath = ensureBackendBuilt(rootDir);
 
 // 4. Spawn backend
 console.log('[Dev] Starting Smart EV Hub C++ Backend...');

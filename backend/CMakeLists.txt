@@ -42,18 +42,29 @@ set(SECURITY_SOURCES
     aditya_singh/security/jwt_util.cpp
 )
 
-# Crow and Asio dependency resolution
+# -----------------------------------------------------------------------------
+# Dependency Resolution: Crow and Asio
+# Resolves Asio and Crow independently, supporting local vendored headers,
+# sibling repositories, and pinned CMake FetchContent fallback.
+# -----------------------------------------------------------------------------
 include(FetchContent)
 
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/Crow/include" AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/asio/include")
-    list(APPEND COMMON_INCLUDES
-        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/Crow/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/asio/include
-    )
-elseif(EXISTS "${CMAKE_SOURCE_DIR}/../Crow/include")
-    list(APPEND COMMON_INCLUDES "${CMAKE_SOURCE_DIR}/../Crow/include")
+# Handle CMP0169 for CMake 3.30+
+# Asio is an autotools header-only distribution without a root CMakeLists.txt,
+# so manual FetchContent_Populate is required to prevent add_subdirectory failure.
+if(POLICY CMP0169)
+    cmake_policy(SET CMP0169 OLD)
+endif()
+
+# 1. Asio Dependency Resolution (Header-Only Standalone)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/asio/include")
+    message(STATUS "Using local vendored Asio headers: ${CMAKE_CURRENT_SOURCE_DIR}/third_party/asio/include")
+    list(APPEND COMMON_INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/third_party/asio/include")
+elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/asio/asio/include")
+    message(STATUS "Using local vendored Asio headers: ${CMAKE_CURRENT_SOURCE_DIR}/third_party/asio/asio/include")
+    list(APPEND COMMON_INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/third_party/asio/asio/include")
 else()
-    message(STATUS "Fetching standalone Asio headers...")
+    message(STATUS "Fetching standalone Asio headers via FetchContent (pinned: asio-1-28-0)...")
     FetchContent_Declare(
         asio
         GIT_REPOSITORY https://github.com/chriskohlhoff/asio.git
@@ -65,8 +76,17 @@ else()
         FetchContent_Populate(asio)
         list(APPEND COMMON_INCLUDES ${asio_SOURCE_DIR}/asio/include)
     endif()
+endif()
 
-    message(STATUS "Fetching Crow microframework...")
+# 2. Crow Microframework Dependency Resolution (Header-Only)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/Crow/include")
+    message(STATUS "Using local vendored Crow headers: ${CMAKE_CURRENT_SOURCE_DIR}/third_party/Crow/include")
+    list(APPEND COMMON_INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/third_party/Crow/include")
+elseif(EXISTS "${CMAKE_SOURCE_DIR}/../Crow/include")
+    message(STATUS "Using sibling Crow headers: ${CMAKE_SOURCE_DIR}/../Crow/include")
+    list(APPEND COMMON_INCLUDES "${CMAKE_SOURCE_DIR}/../Crow/include")
+else()
+    message(STATUS "Fetching Crow microframework via FetchContent (pinned: v1.2.0)...")
     FetchContent_Declare(
         crow
         GIT_REPOSITORY https://github.com/CrowCpp/Crow.git
