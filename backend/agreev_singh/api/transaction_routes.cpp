@@ -1,4 +1,5 @@
 #include "transaction_routes.h"
+#include "../../aditya_singh/security/jwt_util.h"
 #include <iostream>
 
 // ============================================================================
@@ -11,19 +12,36 @@ void registerTransactionRoutes(crow::App<crow::CORSHandler>& app, TransactionSer
 
     // ------------------------------------------------------------------------
     // 1. GET /api/transactions
-    // Returns transaction history. Optional query params:
+    // Returns transaction history. Strictly isolates data for normal USER role.
+    // Optional query params:
     // - ?type=charging or ?type=battery-swap
     // - ?evId=EV-103
     // ------------------------------------------------------------------------
     CROW_ROUTE(app, "/api/transactions").methods(crow::HTTPMethod::GET)
     ([&txnService](const crow::request& req){
+        std::string authHeader = req.get_header_value("Authorization");
+        int userId = 0;
+        if (!authHeader.empty()) {
+            crow::response authRes;
+            security::JwtClaims claims;
+            if (security::JwtUtil::requireAuth(req, authRes, claims)) {
+                if (claims.role == "user") {
+                    userId = claims.userId;
+                }
+            } else {
+                return authRes;
+            }
+        }
+
         Transaction list[MAX_TRANSACTIONS];
         int count = 0;
 
         char* typeParam = req.url_params.get("type");
         char* evIdParam = req.url_params.get("evId");
 
-        if (typeParam != nullptr) {
+        if (userId > 0) {
+            count = txnService.getUserTransactions(list, MAX_TRANSACTIONS, userId);
+        } else if (typeParam != nullptr) {
             count = txnService.getTransactionsByType(std::string(typeParam), list, MAX_TRANSACTIONS);
         } else if (evIdParam != nullptr) {
             count = txnService.getTransactionsByVehicleId(std::string(evIdParam), list, MAX_TRANSACTIONS);
@@ -31,31 +49,56 @@ void registerTransactionRoutes(crow::App<crow::CORSHandler>& app, TransactionSer
             count = txnService.getAllTransactions(list, MAX_TRANSACTIONS);
         }
 
-        crow::json::wvalue res;
+        crow::json::wvalue::list txnsList;
         for (int i = 0; i < count; i++) {
-            res[i]["id"] = list[i].getId();
-            res[i]["evId"] = list[i].getVehicleId();
-            res[i]["type"] = list[i].getType();
-            res[i]["stationOrBattery"] = list[i].getStationOrBattery();
-            res[i]["description"] = list[i].getDescription();
-            res[i]["amount"] = list[i].getAmount();
-            res[i]["energyDelivered"] = list[i].getEnergyDelivered();
-            res[i]["duration"] = list[i].getDuration();
-            res[i]["date"] = list[i].getTimestamp();
-            res[i]["status"] = list[i].getStatus();
+            crow::json::wvalue item;
+            item["id"] = list[i].getId();
+            item["evId"] = list[i].getVehicleId();
+            item["type"] = list[i].getType();
+            item["stationOrBattery"] = list[i].getStationOrBattery();
+            item["description"] = list[i].getDescription();
+            item["amount"] = list[i].getAmount();
+            item["energyDelivered"] = list[i].getEnergyDelivered();
+            item["duration"] = list[i].getDuration();
+            item["date"] = list[i].getTimestamp();
+            item["status"] = list[i].getStatus();
+            item["userId"] = list[i].getUserId();
+            item["sessionId"] = list[i].getSessionId();
+            txnsList.push_back(std::move(item));
         }
 
+        crow::json::wvalue res = std::move(txnsList);
         return crow::response(200, res);
     });
 
     // ------------------------------------------------------------------------
     // 2. GET /api/transactions/<string>
-    // Looks up a single transaction by ID
+    // Looks up a single transaction by ID with ownership enforcement
     // ------------------------------------------------------------------------
     CROW_ROUTE(app, "/api/transactions/<string>").methods(crow::HTTPMethod::GET)
-    ([&txnService](const std::string& id){
+    ([&txnService](const crow::request& req, const std::string& id){
+        std::string authHeader = req.get_header_value("Authorization");
+        security::JwtClaims claims;
+        bool hasAuth = false;
+        if (!authHeader.empty()) {
+            crow::response authRes;
+            if (security::JwtUtil::requireAuth(req, authRes, claims)) {
+                hasAuth = true;
+            } else {
+                return authRes;
+            }
+        }
+
         Transaction txn;
         if (txnService.getTransactionById(id, txn)) {
+            // Ownership check (Phase 14)
+            if (hasAuth && claims.role == "user" && txn.getUserId() > 0 && txn.getUserId() != claims.userId) {
+                crow::json::wvalue err;
+                err["success"] = false;
+                err["message"] = "Access forbidden: you do not have permission to view this transaction";
+                return crow::response(403, err);
+            }
+
             crow::json::wvalue res;
             res["id"] = txn.getId();
             res["evId"] = txn.getVehicleId();
@@ -67,6 +110,8 @@ void registerTransactionRoutes(crow::App<crow::CORSHandler>& app, TransactionSer
             res["duration"] = txn.getDuration();
             res["date"] = txn.getTimestamp();
             res["status"] = txn.getStatus();
+            res["userId"] = txn.getUserId();
+            res["sessionId"] = txn.getSessionId();
             return crow::response(200, res);
         } else {
             crow::json::wvalue err;
@@ -82,6 +127,18 @@ void registerTransactionRoutes(crow::App<crow::CORSHandler>& app, TransactionSer
     // ------------------------------------------------------------------------
     CROW_ROUTE(app, "/api/transactions").methods(crow::HTTPMethod::POST)
     ([&txnService](const crow::request& req){
+        std::string authHeader = req.get_header_value("Authorization");
+        int callerUserId = 0;
+        if (!authHeader.empty()) {
+            crow::response authRes;
+            security::JwtClaims claims;
+            if (security::JwtUtil::requireAuth(req, authRes, claims)) {
+                callerUserId = claims.userId;
+            } else {
+                return authRes;
+            }
+        }
+
         crow::json::wvalue res;
         auto json = crow::json::load(req.body);
 
@@ -91,7 +148,6 @@ void registerTransactionRoutes(crow::App<crow::CORSHandler>& app, TransactionSer
             return crow::response(400, res);
         }
 
-        // Extract fields with fallbacks
         std::string id = txnService.generateNextId();
         if (json.has("id")) {
             id = std::string(json["id"].s());
@@ -128,7 +184,6 @@ void registerTransactionRoutes(crow::App<crow::CORSHandler>& app, TransactionSer
         if (json.has("amount")) {
             amount = json["amount"].d();
         } else {
-            // Auto-calculate bill using OOP syllabus tariff logic
             amount = Transaction::calculateTariff(energy, type);
         }
 
@@ -149,7 +204,12 @@ void registerTransactionRoutes(crow::App<crow::CORSHandler>& app, TransactionSer
             status = std::string(json["status"].s());
         }
 
-        Transaction txn(id, evId, type, target, desc, amount, energy, duration, timestamp, status);
+        std::string sessionId = "";
+        if (json.has("sessionId")) {
+            sessionId = std::string(json["sessionId"].s());
+        }
+
+        Transaction txn(id, evId, type, target, desc, amount, energy, duration, timestamp, status, callerUserId, sessionId);
 
         if (txnService.addTransaction(txn)) {
             res["success"] = true;

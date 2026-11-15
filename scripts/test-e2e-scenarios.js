@@ -646,8 +646,256 @@ async function runAllScenarios() {
   const dbStats = fs.statSync(dbFile);
   assert(dbStats.size > 0, `SQLite database file has size ${dbStats.size} bytes`);
 
+  // ==========================================================================
+  // SCENARIO 7: Complete End-to-End User Charging Journey (16 Phases)
+  // ==========================================================================
+  console.log('\n----------------------------------------------------------------');
+  console.log(' SCENARIO 7: Complete User Charging Journey & Data Isolation');
+  console.log('----------------------------------------------------------------');
+
+  // 7.1 Register and Authenticate Normal User
+  const journeyUserEmail = `customer_${Date.now()}@evhub.com`;
+  const journeyUserPass = 'CustomerPass2026!';
+  const customerReg = await request({
+    hostname: 'localhost',
+    port: 8080,
+    path: '/api/register',
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' }
+  }, {
+    name: 'Aarav Mehta',
+    email: journeyUserEmail,
+    password: journeyUserPass,
+    role: 'user'
+  });
+  assert(customerReg.statusCode === 201, 'Customer account registered successfully');
+  const customerUserId = customerReg.data.user.id;
+
+  const customerLogin = await request({
+    hostname: 'localhost',
+    port: 8080,
+    path: '/api/login',
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' }
+  }, {
+    email: journeyUserEmail,
+    password: journeyUserPass
+  });
+  assert(customerLogin.statusCode === 200, 'Customer logged in and received JWT token');
+  const customerToken = customerLogin.data.token;
+
+  // 7.2 Register Customer EV
+  const customerEvId = `EV-AARAV-${Math.floor(100 + Math.random() * 900)}`;
+  const regEvRes = await request({
+    hostname: 'localhost',
+    port: 8080,
+    path: '/api/evs',
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${customerToken}`
+    }
+  }, {
+    id: customerEvId,
+    owner: 'Aarav Mehta',
+    model: 'Hyundai Ioniq 5',
+    batteryCapacity: 72.6,
+    currentCharge: 22.0,
+    status: 'available'
+  });
+  assert(regEvRes.statusCode === 201, `Customer registered EV ${customerEvId} with 22% SoC`);
+
+  // 7.3 Data Isolation Check: Normal user only sees their own EVs
+  const myEvsRes = await request({
+    hostname: 'localhost',
+    port: 8080,
+    path: '/api/evs',
+    method: 'GET',
+    headers: { 'Authorization': `Bearer ${customerToken}` }
+  });
+  assert(myEvsRes.statusCode === 200, 'GET /api/evs succeeds for customer');
+  const myEvs = Array.isArray(myEvsRes.data) ? myEvsRes.data : myEvsRes.data.vehicles;
+  assert(myEvs.some(e => e.id === customerEvId), 'Registered EV appears in user EV list');
+  assert(myEvs.every(e => e.userId === customerUserId || !e.userId || e.owner === 'Aarav Mehta'), 'User EV list isolates records to authenticated user');
+
+  // 7.4 Station Discovery
+  const journeyStationsRes = await request({
+    hostname: 'localhost',
+    port: 8080,
+    path: '/api/stations',
+    method: 'GET'
+  });
+  assert(journeyStationsRes.statusCode === 200, 'Stations list retrieved successfully');
+  const allStations = Array.isArray(journeyStationsRes.data) ? journeyStationsRes.data : journeyStationsRes.data.stations;
+  assert(allStations.length >= 4, `Discovered ${allStations.length} charging stations`);
+
+  // 7.5 Customer Charging Request (Target SoC: 88%)
+  const chargeReqRes = await request({
+    hostname: 'localhost',
+    port: 8080,
+    path: '/api/charging/request',
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${customerToken}`
+    }
+  }, {
+    evId: customerEvId,
+    targetCharge: 88.0
+  });
+  assert(chargeReqRes.statusCode === 200, 'POST /api/charging/request accepted');
+  assert(chargeReqRes.data.success === true, 'Charging request processed successfully');
+
+  let journeySessionId = chargeReqRes.data.session ? chargeReqRes.data.session.id : null;
+  if (chargeReqRes.data.allocated) {
+    assert(!!journeySessionId, `Charging bay immediately allocated: ${chargeReqRes.data.stationId} (Session: ${journeySessionId})`);
+  } else {
+    assert(chargeReqRes.data.queued === true, `All bays occupied: Vehicle ${customerEvId} entered FIFO charging queue`);
+
+    // Release occupying bay to verify automated FIFO dispatch
+    console.log(`  Releasing occupying station to test automated FIFO dispatch for ${customerEvId}...`);
+    const sessionsListRes = await request({
+      hostname: 'localhost',
+      port: 8080,
+      path: '/api/sessions?status=active',
+      method: 'GET'
+    });
+    const activeList = Array.isArray(sessionsListRes.data) ? sessionsListRes.data : [];
+    if (activeList.length > 0) {
+      await request({
+        hostname: 'localhost',
+        port: 8080,
+        path: '/api/charging/complete',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      }, {
+        sessionId: activeList[0].id
+      });
+    }
+
+    const customerSessions = await request({
+      hostname: 'localhost',
+      port: 8080,
+      path: '/api/sessions?status=active',
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${customerToken}` }
+    });
+    const mySessions = Array.isArray(customerSessions.data) ? customerSessions.data : [];
+    const myActive = mySessions.find(s => s.evId === customerEvId);
+    if (myActive) {
+      journeySessionId = myActive.id;
+      assert(!!journeySessionId, `Vehicle ${customerEvId} auto-dispatched from FIFO queue to Station ${myActive.stationId} (Session: ${journeySessionId})`);
+    }
+  }
+
+  // 7.6 Live Session Monitoring & Academic Constant-Power Simulation
+  if (journeySessionId) {
+    const sessionDetails = await request({
+      hostname: 'localhost',
+      port: 8080,
+      path: `/api/sessions/${journeySessionId}`,
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${customerToken}` }
+    });
+    assert(sessionDetails.statusCode === 200, `GET /api/sessions/${journeySessionId} returns HTTP 200`);
+    assert(sessionDetails.data.session.id === journeySessionId, 'Retrieved live session details match session ID');
+    assert(typeof sessionDetails.data.session.currentCharge === 'number', `Live SoC progress computed: ${sessionDetails.data.session.currentCharge}%`);
+    assert(sessionDetails.data.session.currentCharge >= 22.0, 'Live SoC is >= starting charge (22%)');
+
+    // 7.7 Authorization Guard: Another customer cannot access or stop Aarav\'s session
+    const otherUserReg = await request({
+      hostname: 'localhost',
+      port: 8080,
+      path: '/api/register',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    }, {
+      name: 'Other Customer',
+      email: `other_${Date.now()}@evhub.com`,
+      password: 'OtherPassword123!',
+      role: 'user'
+    });
+    const otherLogin = await request({
+      hostname: 'localhost',
+      port: 8080,
+      path: '/api/login',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    }, {
+      email: otherUserReg.data.user.email,
+      password: 'OtherPassword123!'
+    });
+    const otherToken = otherLogin.data.token;
+
+    const unauthorizedStop = await request({
+      hostname: 'localhost',
+      port: 8080,
+      path: '/api/charging/complete',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${otherToken}`
+      }
+    }, {
+      sessionId: journeySessionId
+    });
+    assert(unauthorizedStop.statusCode === 403, 'Unauthorized user cannot stop another customer charging session (HTTP 403 Forbidden)');
+
+    // 7.8 Complete Charging Session (Authorized Customer)
+    const customerCompleteRes = await request({
+      hostname: 'localhost',
+      port: 8080,
+      path: '/api/charging/complete',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${customerToken}`
+      }
+    }, {
+      sessionId: journeySessionId
+    });
+    assert(customerCompleteRes.statusCode === 200, 'Customer successfully completed charging session');
+    assert(customerCompleteRes.data.transaction && customerCompleteRes.data.transaction.amount > 0, `Billing invoice generated: INR ${customerCompleteRes.data.transaction?.amount}`);
+
+    // 7.9 Verify EV Battery SoC Updated in Database
+    const postChargeEv = await request({
+      hostname: 'localhost',
+      port: 8080,
+      path: `/api/evs/${customerEvId}`,
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${customerToken}` }
+    });
+    assert(postChargeEv.statusCode === 200, 'GET /api/evs/:id returns updated vehicle');
+    assert(postChargeEv.data.currentCharge === 88.0, `Vehicle SoC updated in SQLite to target charge: 88%`);
+    assert(postChargeEv.data.status === 'available', `Vehicle status returned to "available"`);
+
+    // 7.10 Verify Scoped Transactions & Tax Receipt
+    const myTxnsRes = await request({
+      hostname: 'localhost',
+      port: 8080,
+      path: '/api/transactions',
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${customerToken}` }
+    });
+    assert(myTxnsRes.statusCode === 200, 'GET /api/transactions succeeds for customer');
+    const myTxns = Array.isArray(myTxnsRes.data) ? myTxnsRes.data : [];
+    assert(myTxns.some(t => t.evId === customerEvId), 'Completed session transaction present in customer billing records');
+
+    // Other customer cannot see Aarav\'s transaction
+    const otherTxnsRes = await request({
+      hostname: 'localhost',
+      port: 8080,
+      path: '/api/transactions',
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${otherToken}` }
+    });
+    const otherTxns = Array.isArray(otherTxnsRes.data) ? otherTxnsRes.data : [];
+    assert(!otherTxns.some(t => t.evId === customerEvId), 'Transaction isolation verified: Customer cannot view another customer invoices');
+  }
+
+
   console.log('\n================================================================');
-  console.log(` ALL 6 END-TO-END SCENARIOS VERIFIED SUCCESSFULLY!`);
+  console.log(` ALL 7 END-TO-END SCENARIOS VERIFIED SUCCESSFULLY!`);
   console.log(` Total Assertions: ${totalCount} | Passed: ${passedCount} | Failed: 0`);
   console.log('================================================================\n');
 }

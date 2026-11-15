@@ -40,6 +40,9 @@ public:
     // Retrieves all transactions into outList array, returning the total count
     int getAllTransactions(Transaction outList[], int maxCapacity);
 
+    // Retrieves transactions filtered by user ID (ownership isolation)
+    int getUserTransactions(Transaction outList[], int maxCapacity, int userId);
+
     // Finds a transaction by unique ID using linear search; returns true if found
     bool getTransactionById(const std::string& id, Transaction& outTxn);
 
