@@ -29,7 +29,9 @@ CREATE TABLE IF NOT EXISTS EV (
     current_charge REAL NOT NULL DEFAULT 20.0 CHECK(current_charge >= 0.0 AND current_charge <= 100.0),
     status TEXT NOT NULL DEFAULT 'available' CHECK(status IN ('available', 'charging', 'waiting', 'swapping')),
     last_activity DATETIME DEFAULT CURRENT_TIMESTAMP,
-    registered_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    registered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    user_id INTEGER DEFAULT NULL,
+    FOREIGN KEY(user_id) REFERENCES Users(id) ON DELETE SET NULL
 );
 
 -- ----------------------------------------------------------------------------
@@ -114,17 +116,24 @@ INSERT OR IGNORE INTO Users (id, name, email, password, role) VALUES
 (5, 'Priyanshu Dutt', 'priyanshu@evhub.com', 'priyanshu', 'admin'),
 (6, 'Mritunjay Thakur', 'mritunjay@evhub.com', 'mritunjay', 'admin'),
 (7, 'Amit Singh Kaintura', 'amit@evhub.com', 'amit', 'admin'),
-(8, 'Agreev Singh', 'agreev@evhub.com', 'agreev', 'admin');
+(8, 'Agreev Singh', 'agreev@evhub.com', 'agreev', 'admin'),
+(9, 'Rahul Sharma', 'rahul@evhub.com', 'user123', 'user'),
+(10, 'Priya Patel', 'priya@evhub.com', 'user123', 'user'),
+(11, 'Vikram Malhotra', 'vikram@evhub.com', 'user123', 'user'),
+(12, 'Ananya Iyer', 'ananya@evhub.com', 'user123', 'user'),
+(13, 'Karan Verma', 'karan@evhub.com', 'user123', 'user'),
+(14, 'Sneha Reddy', 'sneha@evhub.com', 'user123', 'user'),
+(15, 'Krishna Kumar', 'krishna@evhub.com', 'user123', 'user');
 
 -- Electric Vehicles
-INSERT OR IGNORE INTO EV (id, owner_name, model, battery_capacity, current_charge, status, last_activity) VALUES
-('EV-101', 'Rahul Sharma', 'Tata Nexon EV Max', 40.5, 32.0, 'charging', datetime('now', '-25 minutes')),
-('EV-102', 'Priya Patel', 'MG ZS EV', 50.3, 18.0, 'waiting', datetime('now', '-10 minutes')),
-('EV-103', 'Vikram Malhotra', 'Hyundai Ioniq 5', 72.6, 74.0, 'available', datetime('now', '-1 hour')),
-('EV-104', 'Ananya Iyer', 'Mahindra XUV400', 39.4, 12.0, 'waiting', datetime('now', '-5 minutes')),
-('EV-105', 'Karan Verma', 'BYD Atto 3', 60.5, 45.0, 'available', datetime('now', '-2 hours')),
-('EV-106', 'Sneha Reddy', 'Kia EV6', 77.4, 91.0, 'available', datetime('now', '-30 minutes')),
-('EV-125', 'Vikram Malhotra', 'Volvo EX90 (100 kWh)', 100.0, 0.0, 'waiting', datetime('now', '-2 minutes'));
+INSERT OR IGNORE INTO EV (id, owner_name, model, battery_capacity, current_charge, status, last_activity, user_id) VALUES
+('EV-101', 'Rahul Sharma', 'Tata Nexon EV Max', 40.5, 32.0, 'charging', datetime('now', '-25 minutes'), 9),
+('EV-102', 'Priya Patel', 'MG ZS EV', 50.3, 18.0, 'waiting', datetime('now', '-10 minutes'), 10),
+('EV-103', 'Vikram Malhotra', 'Hyundai Ioniq 5', 72.6, 74.0, 'available', datetime('now', '-1 hour'), 11),
+('EV-104', 'Ananya Iyer', 'Mahindra XUV400', 39.4, 12.0, 'waiting', datetime('now', '-5 minutes'), 12),
+('EV-105', 'Karan Verma', 'BYD Atto 3', 60.5, 45.0, 'available', datetime('now', '-2 hours'), 13),
+('EV-106', 'Sneha Reddy', 'Kia EV6', 77.4, 91.0, 'available', datetime('now', '-30 minutes'), 14),
+('EV-125', 'Vikram Malhotra', 'Volvo EX90 (100 kWh)', 100.0, 0.0, 'waiting', datetime('now', '-2 minutes'), 11);
 
 -- Charging Stations (Rated between 25 kW and 29 kW; 25-29 kW = 25-29 kWh/hr delivery rate)
 INSERT OR IGNORE INTO ChargingStation (id, name, power, connector_type, status, current_vehicle_id, session_start, location, total_ports, available_ports) VALUES

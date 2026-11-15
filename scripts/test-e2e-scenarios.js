@@ -152,14 +152,37 @@ async function runAllScenarios() {
   assert(unauthorizedRes.statusCode === 401, 'Unauthenticated request rejected with HTTP 401');
 
   // ==========================================================================
-  // SCENARIO 2: EV Registration & Full CRUD
+  // SCENARIO 2: EV Registration, Ownership & Data Isolation
   // ==========================================================================
   console.log('\n----------------------------------------------------------------');
-  console.log(' SCENARIO 2: EV Registration & Full CRUD');
+  console.log(' SCENARIO 2: EV Registration, Ownership & Data Isolation');
   console.log('----------------------------------------------------------------');
 
+  // 2.1 Unauthenticated Request Rejections
+  console.log('  Testing unauthenticated access rejections on /api/evs endpoints...');
+  const unauthGetEvs = await request({
+    hostname: 'localhost',
+    port: 8080,
+    path: '/api/evs',
+    method: 'GET'
+  });
+  assert(unauthGetEvs.statusCode === 401, 'GET /api/evs without token returns HTTP 401 Unauthorized');
+
+  const unauthPostEv = await request({
+    hostname: 'localhost',
+    port: 8080,
+    path: '/api/evs',
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' }
+  }, {
+    id: 'EV-UNAUTH-1',
+    model: 'Unauthorized Model'
+  });
+  assert(unauthPostEv.statusCode === 401, 'POST /api/evs without token returns HTTP 401 Unauthorized');
+
+  // 2.2 User A EV Registration (Auto-bind authenticated user ID)
   const testEvId = `EV-${Math.floor(1000 + Math.random() * 9000)}`;
-  console.log(`  Creating EV ${testEvId}...`);
+  console.log(`  Creating EV ${testEvId} as authenticated User A...`);
 
   const createEvRes = await request({
     hostname: 'localhost',
@@ -180,19 +203,22 @@ async function runAllScenarios() {
   });
 
   assert(createEvRes.statusCode === 201, 'POST /api/evs returns HTTP 201 Created');
+  assert(typeof createEvRes.data.userId === 'number' && createEvRes.data.userId > 0,
+         'New EV is automatically bound to authenticated user ID from JWT');
 
-  // 2.2 Retrieve EV
+  // 2.3 User A Retrieve EV
   const getEvRes = await request({
     hostname: 'localhost',
     port: 8080,
     path: `/api/evs/${testEvId}`,
-    method: 'GET'
+    method: 'GET',
+    headers: { 'Authorization': `Bearer ${token}` }
   });
-  assert(getEvRes.statusCode === 200, `GET /api/evs/${testEvId} returns HTTP 200`);
+  assert(getEvRes.statusCode === 200, `GET /api/evs/${testEvId} returns HTTP 200 for vehicle owner`);
   assert(getEvRes.data.model === 'Tata Nexon EV Max', 'EV model matches inserted record');
   assert(getEvRes.data.batteryCapacity === 40.5, 'EV battery capacity matches');
 
-  // 2.3 Update EV
+  // 2.4 User A Update EV
   console.log(`  Updating EV ${testEvId} currentCharge to 80.0% and status to available...`);
   const updateEvRes = await request({
     hostname: 'localhost',
@@ -207,40 +233,145 @@ async function runAllScenarios() {
     currentCharge: 80.0,
     status: 'available'
   });
-  assert(updateEvRes.statusCode === 200, 'PUT /api/evs/:id returns HTTP 200');
+  assert(updateEvRes.statusCode === 200, 'PUT /api/evs/:id returns HTTP 200 for vehicle owner');
 
   const getUpdatedEvRes = await request({
     hostname: 'localhost',
     port: 8080,
     path: `/api/evs/${testEvId}`,
-    method: 'GET'
+    method: 'GET',
+    headers: { 'Authorization': `Bearer ${token}` }
   });
   assert(getUpdatedEvRes.data.currentCharge === 80.0, 'EV battery updated to 80.0% in SQLite');
   assert(getUpdatedEvRes.data.status === 'available', 'EV status updated to available in SQLite');
 
-  // 2.4 Delete Temporary EV (CRUD Verification)
-  const tempEvId = `EV-DEL-${Math.floor(1000 + Math.random() * 9000)}`;
+  // 2.5 Data Isolation for Second User (User B)
+  console.log('  Testing User Data Isolation: Registering and logging in User B...');
+  const userBEmail = `isolation_user_b_${Date.now()}@evhub.com`;
+  const userBPass = 'SecureUserBPassword2026!';
+
   await request({
     hostname: 'localhost',
     port: 8080,
-    path: '/api/evs',
+    path: '/api/register',
     method: 'POST',
     headers: { 'Content-Type': 'application/json' }
   }, {
-    id: tempEvId,
-    owner: 'Temp User',
-    model: 'Test Delete Model',
-    batteryCapacity: 30.0,
-    currentCharge: 50.0,
-    status: 'available'
+    name: 'User B',
+    email: userBEmail,
+    password: userBPass
   });
+
+  const userBLogin = await request({
+    hostname: 'localhost',
+    port: 8080,
+    path: '/api/login',
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' }
+  }, {
+    email: userBEmail,
+    password: userBPass
+  });
+  const userBToken = userBLogin.data.token;
+
+  // User B lists EVs: Must NOT see User A's vehicle!
+  const userBList = await request({
+    hostname: 'localhost',
+    port: 8080,
+    path: '/api/evs',
+    method: 'GET',
+    headers: { 'Authorization': `Bearer ${userBToken}` }
+  });
+  assert(userBList.statusCode === 200, 'GET /api/evs returns HTTP 200 for User B');
+  const userBSeesUserAEV = Array.isArray(userBList.data) && userBList.data.some(e => e.id === testEvId);
+  assert(!userBSeesUserAEV, 'DATA ISOLATION ENFORCED: User B does NOT see User A vehicle in EV list');
+
+  // 2.6 Direct Cross-User API Access Rejections (HTTP 403 Forbidden)
+  console.log(`  Testing direct cross-user API access rejections on ${testEvId}...`);
+  const userBGetAttempt = await request({
+    hostname: 'localhost',
+    port: 8080,
+    path: `/api/evs/${testEvId}`,
+    method: 'GET',
+    headers: { 'Authorization': `Bearer ${userBToken}` }
+  });
+  assert(userBGetAttempt.statusCode === 403, 'Direct GET on another user vehicle rejected with HTTP 403 Forbidden');
+
+  const userBPutAttempt = await request({
+    hostname: 'localhost',
+    port: 8080,
+    path: `/api/evs/${testEvId}`,
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${userBToken}`
+    }
+  }, {
+    currentCharge: 10.0
+  });
+  assert(userBPutAttempt.statusCode === 403, 'Direct PUT on another user vehicle rejected with HTTP 403 Forbidden');
+
+  const userBDelAttempt = await request({
+    hostname: 'localhost',
+    port: 8080,
+    path: `/api/evs/${testEvId}`,
+    method: 'DELETE',
+    headers: { 'Authorization': `Bearer ${userBToken}` }
+  });
+  assert(userBDelAttempt.statusCode === 403, 'Direct DELETE on another user vehicle rejected with HTTP 403 Forbidden');
+
+  // 2.7 Operator Access Verification (RBAC)
+  console.log('  Testing operator management access on registered vehicle...');
+  const opLogin = await request({
+    hostname: 'localhost',
+    port: 8080,
+    path: '/api/login',
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' }
+  }, {
+    email: 'operator@evhub.com',
+    password: 'operator123'
+  });
+  const opToken = opLogin.data.token;
+
+  const opList = await request({
+    hostname: 'localhost',
+    port: 8080,
+    path: '/api/evs',
+    method: 'GET',
+    headers: { 'Authorization': `Bearer ${opToken}` }
+  });
+  assert(opList.statusCode === 200, 'GET /api/evs returns HTTP 200 for Operator');
+  const opSeesUserAEV = Array.isArray(opList.data) && opList.data.some(e => e.id === testEvId);
+  assert(opSeesUserAEV, 'OPERATOR RBAC: Operator sees all registered vehicles across the fleet');
+
+  const opGet = await request({
+    hostname: 'localhost',
+    port: 8080,
+    path: `/api/evs/${testEvId}`,
+    method: 'GET',
+    headers: { 'Authorization': `Bearer ${opToken}` }
+  });
+  assert(opGet.statusCode === 200, 'OPERATOR RBAC: Operator can access single EV details');
+
+  // 2.8 User A Deletes Own EV
   const delRes = await request({
     hostname: 'localhost',
     port: 8080,
-    path: `/api/evs/${tempEvId}`,
-    method: 'DELETE'
+    path: `/api/evs/${testEvId}`,
+    method: 'DELETE',
+    headers: { 'Authorization': `Bearer ${token}` }
   });
-  assert(delRes.statusCode === 200, 'DELETE /api/evs/:id successfully removes vehicle from SQLite');
+  assert(delRes.statusCode === 200, 'DELETE /api/evs/:id successfully removes vehicle for owner');
+
+  const verifyDel = await request({
+    hostname: 'localhost',
+    port: 8080,
+    path: `/api/evs/${testEvId}`,
+    method: 'GET',
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+  assert(verifyDel.statusCode === 404, 'Deleted vehicle confirmed absent (HTTP 404)');
 
   // ==========================================================================
   // SCENARIO 3: Charging Workflow & Queue FIFO
@@ -270,7 +401,10 @@ async function runAllScenarios() {
     port: 8080,
     path: '/api/evs',
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' }
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    }
   }, {
     id: queuedEvId,
     owner: 'Queue Tester',
@@ -313,7 +447,10 @@ async function runAllScenarios() {
       port: 8080,
       path: '/api/evs',
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      }
     }, {
       id: assignEvId,
       owner: 'Bay Tester',
@@ -376,7 +513,10 @@ async function runAllScenarios() {
     port: 8080,
     path: '/api/evs',
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' }
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    }
   }, {
     id: swapEvId,
     owner: 'Swap Fleet Driver',
@@ -477,7 +617,10 @@ async function runAllScenarios() {
     port: 8080,
     path: '/api/evs',
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' }
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    }
   }, {
     id: persistMarkerEv,
     owner: 'Persistence Verification Guard',
@@ -492,7 +635,8 @@ async function runAllScenarios() {
     hostname: 'localhost',
     port: 8080,
     path: `/api/evs/${persistMarkerEv}`,
-    method: 'GET'
+    method: 'GET',
+    headers: { 'Authorization': `Bearer ${token}` }
   });
   assert(preCheck.statusCode === 200, `Marker EV confirmed in SQLite before restart`);
 
