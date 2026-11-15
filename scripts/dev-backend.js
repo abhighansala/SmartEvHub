@@ -32,8 +32,22 @@ if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
 
 // 3. Ensure executable exists
 const exePath = path.join(rootDir, 'backend', 'build', process.platform === 'win32' ? 'smart_ev_hub_backend.exe' : 'smart_ev_hub_backend');
+const cachePath = path.join(rootDir, 'backend', 'build', 'CMakeCache.txt');
 if (!fs.existsSync(exePath)) {
-  console.log('[Dev] Backend executable not found. Compiling backend with CMake...');
+  console.log('[Dev] Backend executable not found.');
+  if (!fs.existsSync(cachePath)) {
+    console.log('[Dev] CMake build tree not configured. Running initial CMake configure...');
+    const configureCmd = process.platform === 'win32'
+      ? 'cmake -B backend/build -S backend -G "MinGW Makefiles"'
+      : 'cmake -B backend/build -S backend';
+    try {
+      execSync(configureCmd, { cwd: rootDir, stdio: 'inherit' });
+    } catch {
+      console.log('[Dev] Note: MinGW generator configure failed, trying default generator...');
+      execSync('cmake -B backend/build -S backend', { cwd: rootDir, stdio: 'inherit' });
+    }
+  }
+  console.log('[Dev] Compiling backend with CMake...');
   try {
     execSync('cmake --build backend/build', { cwd: rootDir, stdio: 'inherit' });
   } catch (err) {
