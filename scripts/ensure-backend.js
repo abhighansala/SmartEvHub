@@ -18,8 +18,23 @@ export function ensureBackendBuilt(rootDir) {
   );
   const cachePath = path.join(rootDir, 'backend', 'build', 'CMakeCache.txt');
 
-  if (!fs.existsSync(exePath)) {
-    console.log('[Dev] Backend executable not found.');
+  let needsBuild = !fs.existsSync(exePath);
+  if (!needsBuild) {
+    try {
+      const exeMtime = fs.statSync(exePath).mtimeMs;
+      const mainMtime = fs.statSync(path.join(rootDir, 'backend', 'src', 'main.cpp')).mtimeMs;
+      if (mainMtime > exeMtime) {
+        needsBuild = true;
+      }
+    } catch {}
+  }
+
+  if (needsBuild) {
+    if (!fs.existsSync(exePath)) {
+      console.log('[Dev] Backend executable not found.');
+    } else {
+      console.log('[Dev] Backend source files are newer than executable. Rebuilding...');
+    }
     if (!fs.existsSync(cachePath)) {
       console.log('[Dev] CMake build tree not configured. Running initial CMake configure...');
       const configureCmd = process.platform === 'win32'
