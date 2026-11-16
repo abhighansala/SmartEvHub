@@ -123,7 +123,7 @@ public:
     // - For Charging: Base rate of ₹18/kWh. If energy > 30 kWh, 10% discount on units above 30.
     // - For Battery Swap: Fixed swap fee of ₹300 + ₹5/kWh of battery capacity.
     // ------------------------------------------------------------------------
-    static double calculateTariff(double energyKwh, const std::string& opType) {
+    static double calculateTariff(double energyKwh, const std::string& opType, double ratePerKwh = 0.0) {
         if (energyKwh <= 0.0) return 50.0; // Minimum service fee
 
         if (opType == "battery-swap") {
@@ -131,6 +131,9 @@ public:
             double capacityRate = energyKwh * 5.0;
             return baseSwapFee + capacityRate;
         } else {
+            if (ratePerKwh > 0.0) {
+                return energyKwh * ratePerKwh;
+            }
             // Standard EV Charging tariff
             double baseRate = 18.0; // ₹18 per kWh
             double total = 0.0;

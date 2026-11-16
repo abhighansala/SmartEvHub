@@ -141,10 +141,13 @@ export default function StationDetails() {
                   />
                   <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
                     Target: {session?.targetCharge || 85}%
+                    {session?.simulatedRemainingMinutes != null && session.simulatedRemainingMinutes > 0 && (
+                      <> • {session.speedMultiplier && session.speedMultiplier > 1 ? `${session.simulatedRemainingMinutes}m simulated (~${session.demoRemainingMinutes || Math.ceil(session.simulatedRemainingMinutes / session.speedMultiplier)}m demo)` : `${session.simulatedRemainingMinutes}m remaining`}</>
+                    )}
                   </Typography>
                 </Box>
 
-                <Box sx={{ display: 'flex', gap: 4, flexWrap: 'wrap', justifyContent: 'center' }}>
+                <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap', justifyContent: 'center' }}>
                   <Box sx={{ textAlign: 'center' }}>
                     <Typography variant="h4">{session?.evId || station.currentEV || 'Electric Vehicle'}</Typography>
                     <Typography variant="caption" color="text.secondary">Vehicle</Typography>
@@ -152,6 +155,10 @@ export default function StationDetails() {
                   <Box sx={{ textAlign: 'center' }}>
                     <Typography variant="h4">{getDuration(session?.startTime || station.sessionStart)}</Typography>
                     <Typography variant="caption" color="text.secondary">Duration</Typography>
+                  </Box>
+                  <Box sx={{ textAlign: 'center' }}>
+                    <Typography variant="h4">{(session?.energyConsumed || 0).toFixed(1)} kWh</Typography>
+                    <Typography variant="caption" color="text.secondary">Delivered</Typography>
                   </Box>
                   <Box sx={{ textAlign: 'center' }}>
                     <Typography variant="h4">₹{(session?.estimatedCost || 0).toFixed(0)}</Typography>

@@ -30,8 +30,23 @@ private:
     ChargingRequest requestArray[MAX_REQUESTS];
     int requestCount;
 
+    // Configurable Charging Simulation Parameters
+    double m_speedMultiplier;
+    double m_chargingEfficiency;
+    double m_tariffRate;
+
 public:
     StationService(Database* database = nullptr);
+
+    // Simulation Speed & Physical Configuration
+    void setSimulationSpeedMultiplier(double mult) { m_speedMultiplier = (mult > 0.0) ? mult : 1.0; }
+    double getSimulationSpeedMultiplier() const { return m_speedMultiplier; }
+
+    void setChargingEfficiency(double eff) { m_chargingEfficiency = (eff > 0.0 && eff <= 1.0) ? eff : 0.90; }
+    double getChargingEfficiency() const { return m_chargingEfficiency; }
+
+    void setTariffRate(double rate) { m_tariffRate = (rate >= 0.0) ? rate : 0.0; }
+    double getTariffRate() const { return m_tariffRate; }
 
     // Database schema auto-migration helper
     void ensureSchemaMigrations();
