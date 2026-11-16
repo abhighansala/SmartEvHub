@@ -61,8 +61,9 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
             }
             s["currentCharge"] = currentCharge;
 
-            // Estimated remaining minutes calculation
+            // Physical simulated & demo remaining time calculation
             int remainingMins = 0;
+            int demoRemainingMins = 0;
             if (list[i].getStatus() == "active" && list[i].getTargetCharge() > currentCharge) {
                 double neededKWh = ((list[i].getTargetCharge() - currentCharge) / 100.0) * 50.0;
                 double powerKW = 25.0;
@@ -70,9 +71,17 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
                 if (stationService.getStationById(list[i].getStationId(), st) && st.getPower() > 0.0) {
                     powerKW = st.getPower();
                 }
-                remainingMins = static_cast<int>(std::ceil((neededKWh / (powerKW * 0.92)) * 60.0));
+                double eff = stationService.getChargingEfficiency();
+                double batterySidePower = powerKW * eff;
+                double physicalHours = (batterySidePower > 0.0) ? (neededKWh / batterySidePower) : 0.0;
+                remainingMins = static_cast<int>(std::ceil(physicalHours * 60.0));
+                double mult = stationService.getSimulationSpeedMultiplier();
+                demoRemainingMins = static_cast<int>(std::ceil((physicalHours / mult) * 60.0));
             }
             s["remainingMinutes"] = remainingMins;
+            s["simulatedRemainingMinutes"] = remainingMins;
+            s["demoRemainingMinutes"] = demoRemainingMins;
+            s["speedMultiplier"] = stationService.getSimulationSpeedMultiplier();
 
             s["targetCharge"] = list[i].getTargetCharge();
             s["energyConsumed"] = list[i].getEnergyConsumed();
@@ -124,6 +133,7 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
             s["currentCharge"] = currentCharge;
 
             int remainingMins = 0;
+            int demoRemainingMins = 0;
             if (list[i].getTargetCharge() > currentCharge) {
                 double neededKWh = ((list[i].getTargetCharge() - currentCharge) / 100.0) * 50.0;
                 double powerKW = 25.0;
@@ -131,9 +141,17 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
                 if (stationService.getStationById(list[i].getStationId(), st) && st.getPower() > 0.0) {
                     powerKW = st.getPower();
                 }
-                remainingMins = static_cast<int>(std::ceil((neededKWh / (powerKW * 0.92)) * 60.0));
+                double eff = stationService.getChargingEfficiency();
+                double batterySidePower = powerKW * eff;
+                double physicalHours = (batterySidePower > 0.0) ? (neededKWh / batterySidePower) : 0.0;
+                remainingMins = static_cast<int>(std::ceil(physicalHours * 60.0));
+                double mult = stationService.getSimulationSpeedMultiplier();
+                demoRemainingMins = static_cast<int>(std::ceil((physicalHours / mult) * 60.0));
             }
             s["remainingMinutes"] = remainingMins;
+            s["simulatedRemainingMinutes"] = remainingMins;
+            s["demoRemainingMinutes"] = demoRemainingMins;
+            s["speedMultiplier"] = stationService.getSimulationSpeedMultiplier();
 
             s["targetCharge"] = list[i].getTargetCharge();
             s["energyConsumed"] = list[i].getEnergyConsumed();
@@ -592,5 +610,51 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
             res["message"] = "Could not complete charging session. Session may not be active, station already released, or permission denied.";
             return crow::response(400, res);
         }
+    });
+
+    // GET /api/charging/config - Query simulation configuration
+    CROW_ROUTE(app, "/api/charging/config").methods(crow::HTTPMethod::GET)
+    ([&stationService](){
+        crow::json::wvalue res;
+        res["success"] = true;
+        res["speedMultiplier"] = stationService.getSimulationSpeedMultiplier();
+        res["efficiency"] = stationService.getChargingEfficiency();
+        res["tariffRate"] = stationService.getTariffRate();
+        return crow::response(200, res);
+    });
+
+    // POST /api/charging/config - Update simulation configuration (operator/admin only)
+    CROW_ROUTE(app, "/api/charging/config").methods(crow::HTTPMethod::POST)
+    ([&stationService](const crow::request& req){
+        crow::response authRes;
+        security::JwtClaims claims;
+        if (!security::JwtUtil::requireAuth(req, authRes, claims, "operator")) {
+            return authRes;
+        }
+
+        auto json = crow::json::load(req.body);
+        if (!json) {
+            crow::json::wvalue err;
+            err["success"] = false;
+            err["message"] = "Invalid JSON payload";
+            return crow::response(400, err);
+        }
+
+        if (json.has("speedMultiplier")) {
+            stationService.setSimulationSpeedMultiplier(json["speedMultiplier"].d());
+        }
+        if (json.has("efficiency")) {
+            stationService.setChargingEfficiency(json["efficiency"].d());
+        }
+        if (json.has("tariffRate")) {
+            stationService.setTariffRate(json["tariffRate"].d());
+        }
+
+        crow::json::wvalue res;
+        res["success"] = true;
+        res["speedMultiplier"] = stationService.getSimulationSpeedMultiplier();
+        res["efficiency"] = stationService.getChargingEfficiency();
+        res["tariffRate"] = stationService.getTariffRate();
+        return crow::response(200, res);
     });
 }

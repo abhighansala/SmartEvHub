@@ -202,11 +202,11 @@ export default function ActiveSessions() {
                 {displayedSessions.map(s => {
                   const currentSoC = s.currentCharge ?? (s.batteryEnd ?? s.batteryStart);
                   const isActive = s.status === 'active';
-                  const remainingMins = isActive
-                    ? (s.remainingMinutes != null
-                        ? s.remainingMinutes
-                        : Math.max(0, Math.round((((s.targetCharge - currentSoC) / 100) * 50) / (25 * 0.92) * 60)))
-                    : 0;
+                  const simRemaining = s.simulatedRemainingMinutes ?? s.remainingMinutes ?? (isActive
+                    ? Math.max(0, Math.round((((s.targetCharge - currentSoC) / 100) * 50) / (25 * 0.90) * 60))
+                    : 0);
+                  const speedMult = s.speedMultiplier ?? 20;
+                  const demoRemaining = s.demoRemainingMinutes ?? (speedMult > 1 ? Math.max(1, Math.ceil(simRemaining / speedMult)) : simRemaining);
 
                   return (
                     <TableRow key={s.id} hover>
@@ -246,12 +246,26 @@ export default function ActiveSessions() {
                       <TableCell align="right">{s.targetCharge}%</TableCell>
                       <TableCell>
                         {isActive ? (
-                          <Chip
-                            label={remainingMins > 0 ? `${remainingMins}m left` : 'Completing...'}
-                            size="small"
-                            color={remainingMins <= 5 ? 'success' : 'default'}
-                            variant="outlined"
-                          />
+                          <Tooltip
+                            title={
+                              speedMult > 1
+                                ? `Simulated physical duration: ${simRemaining}m. Demonstration countdown (${speedMult}x): ~${demoRemaining}m`
+                                : `Estimated physical charging time: ${simRemaining}m`
+                            }
+                          >
+                            <Chip
+                              label={
+                                simRemaining <= 0
+                                  ? 'Completing...'
+                                  : speedMult > 1
+                                  ? `${simRemaining}m sim (~${demoRemaining}m demo)`
+                                  : `${simRemaining}m remaining`
+                              }
+                              size="small"
+                              color={demoRemaining <= 2 ? 'success' : 'default'}
+                              variant="outlined"
+                            />
+                          </Tooltip>
                         ) : (
                           <Typography variant="body2" color="text.secondary">Completed</Typography>
                         )}

@@ -557,6 +557,188 @@ int main() {
     std::remove((phase7DbFile + "-wal").c_str());
     std::remove((phase7DbFile + "-shm").c_str());
 
+    // ------------------------------------------------------------------------
+    // 16. Testing Configurable Simulation Speed Multiplier & Accelerated Demonstrations
+    // ------------------------------------------------------------------------
+    std::cout << "\n--- 16. Testing Configurable Simulation Speed Multiplier & Demonstrations ---\n";
+    std::string speedDbFile = "test_speed_sim.db";
+    std::remove(speedDbFile.c_str());
+    std::remove((speedDbFile + "-wal").c_str());
+    std::remove((speedDbFile + "-shm").c_str());
+
+    Database speedDb(speedDbFile);
+    assert(speedDb.open());
+    bool speedSchemaLoaded = speedDb.initSchema("backend/database/schema.sql") ||
+                             speedDb.initSchema("../database/schema.sql") ||
+                             speedDb.initSchema("database/schema.sql");
+    assert(speedSchemaLoaded && "Failed to load schema for speedDb");
+
+    StationService speedService(&speedDb);
+
+    // Test 1: Configurable Multiplier Defaults and Setting
+    assert(speedService.getSimulationSpeedMultiplier() == 20.0);
+    speedService.setSimulationSpeedMultiplier(1.0);
+    assert(speedService.getSimulationSpeedMultiplier() == 1.0);
+    speedService.setSimulationSpeedMultiplier(50.0);
+    assert(speedService.getSimulationSpeedMultiplier() == 50.0);
+    speedService.setSimulationSpeedMultiplier(20.0);
+    assert(speedService.getSimulationSpeedMultiplier() == 20.0);
+    std::cout << "[PASS] Configurable simulation speed multiplier (1x, 20x, 50x) verified.\n";
+
+    // Test 2: Section 4 Example Verification Scenario
+    // Battery capacity: 75 kWh, Initial SoC: 20%, Target SoC: 80%
+    // Station power: 25 kW, Efficiency: 90% (0.90), Tariff: ₹15/kWh, Multiplier: 20
+    speedService.setChargingEfficiency(0.90);
+    speedService.setTariffRate(15.0);
+    speedService.setSimulationSpeedMultiplier(20.0);
+
+    sqlite3* sHandle = speedDb.getDbHandle();
+    // Clear any seeded active sessions in speedDb so advanceActiveSessions strictly tests demoSes
+    sqlite3_exec(sHandle, "DELETE FROM ChargingSession WHERE status = 'active';", nullptr, nullptr, nullptr);
+    sqlite3_exec(sHandle, "UPDATE ChargingStation SET status = 'available', current_vehicle_id = NULL WHERE status = 'charging';", nullptr, nullptr, nullptr);
+    sqlite3_exec(sHandle, "UPDATE EV SET status = 'available' WHERE status = 'charging';", nullptr, nullptr, nullptr);
+    sqlite3_exec(sHandle, "INSERT OR REPLACE INTO EV (id, owner_name, model, battery_capacity, current_charge, status, user_id, connector_type) "
+                          "VALUES ('EV-DEMO-75', 'Test Driver', 'Demonstration Long-Range EV', 75.0, 20.0, 'available', 9, 'CCS2');", nullptr, nullptr, nullptr);
+    sqlite3_exec(sHandle, "INSERT OR REPLACE INTO ChargingStation (id, name, power, connector_type, status, current_vehicle_id, location) "
+                          "VALUES ('CS-DEMO-25', 'Demo 25kW Charger', 25.0, 'CCS2', 'available', NULL, 'Demo Bay 1');", nullptr, nullptr, nullptr);
+
+    // Physical formula verification:
+    double batteryCapacity = 75.0;
+    double initialSoC = 20.0;
+    double targetSoC = 80.0;
+    double stationPower = 25.0;
+    double efficiency = 0.90;
+    double tariffRate = 15.0;
+    double mult = 20.0;
+
+    double expectedBatteryEnergy = batteryCapacity * (targetSoC - initialSoC) / 100.0; // 45.0 kWh
+    double expectedBatteryPower = stationPower * efficiency; // 22.5 kW
+    double expectedPhysicalHours = expectedBatteryEnergy / expectedBatteryPower; // 2.0 hours
+    double expectedPhysicalMinutes = expectedPhysicalHours * 60.0; // 120.0 minutes
+    double expectedDemoMinutes = expectedPhysicalMinutes / mult; // 6.0 minutes (360s)
+    double expectedGridEnergy = expectedBatteryEnergy / efficiency; // 50.0 kWh
+    double expectedCost = expectedGridEnergy * tariffRate; // ₹750.0
+
+    assert(expectedBatteryEnergy == 45.0);
+    assert(expectedPhysicalMinutes == 120.0);
+    assert(expectedDemoMinutes == 6.0);
+    assert(expectedGridEnergy == 50.0);
+    assert(expectedCost == 750.0);
+    std::cout << "[PASS] Section 4 Physical formulas verified: 45 kWh battery, 50 kWh grid, 120m physical, 6m demo, ₹750 cost.\n";
+
+    // Create charging session for EV-DEMO-75 on CS-DEMO-25
+    ChargingSession demoSes;
+    assert(speedService.createChargingSession("EV-DEMO-75", "CS-DEMO-25", 80.0, demoSes, 9));
+    std::string demoSesId = demoSes.getId();
+
+    // Fast-forward session start_time to simulate 3 real minutes elapsed (180 seconds):
+    // 180s * 20x = 3600 simulated seconds = 1.0 simulated hour
+    // In 1.0 simulated hour: energy stored = 25kW * 0.90 * 1h = 22.5 kWh
+    // currentSoC = 20.0% + (22.5 / 75.0)*100 = 50.0%
+    // battery energy delivered = 22.5 kWh
+    // grid energy = 22.5 / 0.90 = 25.0 kWh
+    // cost = 25.0 * 15.0 = ₹375.0
+    std::string ffHalfwaySql = "UPDATE ChargingSession SET start_time = datetime('now', '-180 seconds') WHERE id = '" + demoSesId + "';";
+    sqlite3_exec(sHandle, ffHalfwaySql.c_str(), nullptr, nullptr, nullptr);
+
+    ChargingSession progressSes;
+    double currentSoC = 0.0, energyDelivered = 0.0, currentCost = 0.0;
+    int elapsedSecs = 0;
+    assert(speedService.getSessionProgress(demoSesId, progressSes, currentSoC, energyDelivered, currentCost, elapsedSecs));
+    assert(std::abs(currentSoC - 50.0) < 0.5 && "Halfway SoC must be ~50%");
+    assert(std::abs(energyDelivered - 22.5) < 0.5 && "Battery energy at halfway must be ~22.5 kWh");
+    assert(std::abs(currentCost - 375.0) < 1.0 && "Cost at halfway must be ₹375");
+    std::cout << "[PASS] Accelerated progress at 3 real minutes (50% SoC, 22.5 kWh, ₹375) verified.\n";
+
+    // Advance session at halfway point:
+    ChargingQueue demoQueue;
+    int autoComp = speedService.advanceActiveSessions(&demoQueue);
+    assert(autoComp == 0 && "Session must remain active before reaching target SoC");
+
+    // Enqueue a waiting vehicle into demoQueue to test automatic FIFO dispatch upon completion
+    sqlite3_exec(sHandle, "INSERT OR REPLACE INTO EV (id, owner_name, model, battery_capacity, current_charge, status, user_id, connector_type) "
+                          "VALUES ('EV-WAIT-88', 'Waiting Driver', 'Queued Fleet Car', 50.0, 30.0, 'available', 10, 'CCS2');", nullptr, nullptr, nullptr);
+    ChargingRequest waitReq;
+    ChargingSession waitAllocSes;
+    bool waitAllocated = false;
+    assert(speedService.createChargingRequest(10, "EV-WAIT-88", "CS-DEMO-25", 85.0, waitReq, waitAllocSes, waitAllocated, &demoQueue, "CCS2"));
+    assert(!waitAllocated && "Waiting EV must be queued while CS-DEMO-25 is occupied");
+    assert(demoQueue.getSize() == 1 && demoQueue.peek() == "EV-WAIT-88");
+
+    // Fast-forward session start_time to simulate 6 real minutes elapsed (360 seconds):
+    // 360s * 20x = 7200 simulated seconds = 2.0 simulated hours
+    // Target 80% reached!
+    std::string ffFinishSql = "UPDATE ChargingSession SET start_time = datetime('now', '-360 seconds') WHERE id = '" + demoSesId + "';";
+    sqlite3_exec(sHandle, ffFinishSql.c_str(), nullptr, nullptr, nullptr);
+
+    autoComp = speedService.advanceActiveSessions(&demoQueue);
+    assert(autoComp == 1 && "advanceActiveSessions must auto-complete session when target SoC reached");
+
+    // Verify EV state after completion
+    sqlite3_stmt* checkEvStmt = nullptr;
+    sqlite3_prepare_v2(sHandle, "SELECT current_charge, status FROM EV WHERE id = 'EV-DEMO-75';", -1, &checkEvStmt, nullptr);
+    assert(sqlite3_step(checkEvStmt) == SQLITE_ROW);
+    double finalEvSoC = sqlite3_column_double(checkEvStmt, 0);
+    std::string finalEvStatus = (const char*)sqlite3_column_text(checkEvStmt, 1);
+    sqlite3_finalize(checkEvStmt);
+
+    assert(finalEvSoC == 80.0 && "Final EV SoC must be exactly 80.0%, never higher");
+    assert(finalEvStatus == "available");
+    std::cout << "[PASS] Final SoC accuracy verified: exactly 80.0%, status=available.\n";
+
+    // Verify Transaction generation
+    sqlite3_stmt* checkTxStmt = nullptr;
+    std::string txSql = "SELECT amount, energy_delivered, duration, status FROM TransactionLog WHERE vehicle_id = 'EV-DEMO-75';";
+    sqlite3_prepare_v2(sHandle, txSql.c_str(), -1, &checkTxStmt, nullptr);
+    assert(sqlite3_step(checkTxStmt) == SQLITE_ROW);
+    double txAmount = sqlite3_column_double(checkTxStmt, 0);
+    double txEnergy = sqlite3_column_double(checkTxStmt, 1);
+    int txDuration = sqlite3_column_int(checkTxStmt, 2);
+    std::string txStatus = (const char*)sqlite3_column_text(checkTxStmt, 3);
+    sqlite3_finalize(checkTxStmt);
+
+    assert(txAmount == 750.0 && "Transaction billed amount must be exactly INR 750.0");
+    assert(txEnergy == 50.0 && "Transaction energy delivered must be 50.0 kWh (grid consumed)");
+    assert(txDuration == 120 && "Transaction simulated duration must be 120 minutes");
+    assert(txStatus == "completed");
+    std::cout << "[PASS] TransactionLog verified: INR 750.0, 50.0 kWh, 120 mins duration.\n";
+
+    // Verify Duplicate Transaction Prevention
+    ChargingSession dupCompSes;
+    Transaction dupTxn;
+    bool dupResult = speedService.completeChargingSession(demoSesId, dupCompSes, dupTxn, &demoQueue);
+    assert(!dupResult && "Attempting duplicate completion on already-completed session must return false");
+    std::cout << "[PASS] Duplicate transaction prevention verified: duplicate completion safely rejected.\n";
+
+    // Verify Automatic FIFO Queue Progression
+    // EV-WAIT-88 should have been auto-dispatched to CS-DEMO-25!
+    ChargingStation demoSt;
+    assert(speedService.getStationById("CS-DEMO-25", demoSt));
+    assert(demoSt.getStatus() == "charging" && "CS-DEMO-25 must be occupied by next vehicle");
+    assert(demoSt.getCurrentVehicleId() == "EV-WAIT-88" && "EV-WAIT-88 must have been dispatched from FIFO queue");
+    assert(demoQueue.isEmpty() && "FIFO queue must now be empty");
+    std::cout << "[PASS] Automatic FIFO queue progression verified: EV-WAIT-88 auto-dispatched to released bay.\n";
+
+    // Verify Backend Restart Recovery with simulation multiplier
+    speedDb.close();
+    Database reopenedSpeedDb(speedDbFile);
+    assert(reopenedSpeedDb.open());
+    StationService restartedSpeedService(&reopenedSpeedDb);
+    restartedSpeedService.setSimulationSpeedMultiplier(20.0);
+    restartedSpeedService.setChargingEfficiency(0.90);
+    restartedSpeedService.setTariffRate(15.0);
+
+    ChargingStation recoveredSt;
+    assert(restartedSpeedService.getStationById("CS-DEMO-25", recoveredSt));
+    assert(recoveredSt.getStatus() == "charging");
+    assert(recoveredSt.getCurrentVehicleId() == "EV-WAIT-88");
+    std::cout << "[PASS] Backend restart recovery verified: station and session restored with simulation speed multiplier.\n";
+
+    reopenedSpeedDb.close();
+    std::remove(speedDbFile.c_str());
+    std::remove((speedDbFile + "-wal").c_str());
+    std::remove((speedDbFile + "-shm").c_str());
+
 std::cout << "\n>>> ALL MRITUNJAY THAKUR (CHARGING BACKEND & FIFO QUEUE) TESTS PASSED! <<<\n";
     return 0;
 }
