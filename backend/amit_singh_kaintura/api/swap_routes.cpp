@@ -1,4 +1,5 @@
 #include "swap_routes.h"
+#include "../../aditya_singh/security/jwt_util.h"
 
 // ============================================================================
 // Smart EV Hub - Battery Swap Workflow REST API Endpoints
@@ -19,6 +20,12 @@ void registerSwapRoutes(crow::App<crow::CORSHandler>& app,
     // -------------------------------------------------------------------------
     CROW_ROUTE(app, "/api/swap/request").methods(crow::HTTPMethod::POST)
     ([&batteryService, &swapQueue, txnStack](const crow::request& req) {
+        crow::response authRes;
+        security::JwtClaims claims;
+        if (!security::JwtUtil::requireAuth(req, authRes, claims)) {
+            return authRes;
+        }
+
         crow::json::wvalue res;
         auto json = crow::json::load(req.body);
         if (!json || !json.has("evId")) {
@@ -53,6 +60,9 @@ void registerSwapRoutes(crow::App<crow::CORSHandler>& app,
             requiredCapacity = json["requiredCapacity"].d();
         }
 
+        int callerUserId = (claims.role == "user" ? claims.userId : 0);
+        std::string callerRole = claims.role;
+
         // FIFO preservation: If queue is empty, attempt immediate swap with available inventory
         if (swapQueue.isEmpty()) {
             Battery readyBattery;
@@ -65,7 +75,7 @@ void registerSwapRoutes(crow::App<crow::CORSHandler>& app,
 
             if (found) {
                 Transaction outTxn;
-                bool swapped = batteryService.performSwap(evId, currentBattery, requiredCapacity, readyBattery, &outTxn);
+                bool swapped = batteryService.performSwap(evId, currentBattery, requiredCapacity, readyBattery, &outTxn, callerUserId, callerRole);
                 if (swapped) {
                     if (txnStack != nullptr) {
                         txnStack->push(outTxn.getId());
@@ -82,6 +92,11 @@ void registerSwapRoutes(crow::App<crow::CORSHandler>& app,
                     res["energyDelivered"] = outTxn.getEnergyDelivered();
                     res["message"] = "Swap completed! Assigned battery " + readyBattery.getId();
                     return crow::response(200, res);
+                } else if (callerRole == "user") {
+                    // Check if failure was due to ownership
+                    res["success"] = false;
+                    res["message"] = "Access forbidden: you do not have permission to swap batteries for this vehicle";
+                    return crow::response(403, res);
                 }
             }
         }
@@ -102,7 +117,7 @@ void registerSwapRoutes(crow::App<crow::CORSHandler>& app,
             res["queueSize"] = swapQueue.getSize();
             res["frontIndex"] = swapQueue.getFrontIndex();
             res["rearIndex"] = swapQueue.getRearIndex();
-            res["message"] = "No charged batteries available in inventory. Added vehicle " + evId + " to Swap Queue.";
+            res["message"] = "No compatible charged batteries are currently available. Added vehicle " + evId + " to Swap Queue.";
             return crow::response(200, res);
         } else {
             res["success"] = false;
@@ -118,6 +133,20 @@ void registerSwapRoutes(crow::App<crow::CORSHandler>& app,
     // -------------------------------------------------------------------------
     CROW_ROUTE(app, "/api/swap/process").methods(crow::HTTPMethod::POST)
     ([&batteryService, &swapQueue, txnStack](const crow::request& req) {
+        crow::response authRes;
+        security::JwtClaims claims;
+        if (!security::JwtUtil::requireAuth(req, authRes, claims)) {
+            return authRes;
+        }
+
+        // Only Operator or Admin can process the swap queue
+        if (claims.role == "user") {
+            crow::json::wvalue err;
+            err["success"] = false;
+            err["message"] = "Access forbidden: only operators and administrators can process swap queue";
+            return crow::response(403, err);
+        }
+
         crow::json::wvalue res;
 
         if (swapQueue.isEmpty()) {
@@ -146,7 +175,7 @@ void registerSwapRoutes(crow::App<crow::CORSHandler>& app,
             return crow::response(200, res);
         } else {
             res["success"] = false;
-            res["message"] = "Inventory exhausted. Cannot process swap for vehicle " + nextEvId + ". Vehicle remains at FRONT of queue.";
+            res["message"] = "No compatible charged batteries are currently available. Cannot process swap for vehicle " + nextEvId + ". Vehicle remains at FRONT of queue.";
             return crow::response(400, res);
         }
     });

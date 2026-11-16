@@ -465,7 +465,10 @@ async function runAllScenarios() {
       port: 8080,
       path: '/api/charging/request',
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      }
     }, {
       evId: assignEvId,
       targetCharge: 90
@@ -480,7 +483,10 @@ async function runAllScenarios() {
       port: 8080,
       path: '/api/charging/complete',
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      }
     }, {
       stationId: chargingReqRes.data.stationId
     });
@@ -532,7 +538,10 @@ async function runAllScenarios() {
     port: 8080,
     path: '/api/swap/request',
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' }
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    }
   }, {
     evId: swapEvId,
     currentBattery: 'BAT-DEPLETED-01',

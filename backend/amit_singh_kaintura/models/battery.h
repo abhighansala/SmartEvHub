@@ -27,6 +27,8 @@ private:
     double health;               // State of Health (SoH) percentage (0.0% - 100.0%)
     int cycleCount;              // Lifetime charge cycles completed
     std::string currentVehicle;  // Vehicle ID if currently fitted in an EV (e.g. "EV-102")
+    std::string chargingStart;   // Timestamp when battery began charging in dock
+    double initialCharge;        // Starting charge percentage when placed in charging dock
 
 public:
     // -------------------------------------------------------------------------
@@ -41,6 +43,8 @@ public:
         this->health = 100.0;
         this->cycleCount = 0;
         this->currentVehicle = "";
+        this->chargingStart = "";
+        this->initialCharge = 100.0;
     }
 
     // -------------------------------------------------------------------------
@@ -50,7 +54,8 @@ public:
     // -------------------------------------------------------------------------
     Battery(std::string id, double capacity, double chargeLevel,
             std::string status = "available", double health = 100.0,
-            int cycleCount = 0, std::string currentVehicle = "") {
+            int cycleCount = 0, std::string currentVehicle = "",
+            std::string chargingStart = "", double initialCharge = 0.0) {
         this->id = id;
         this->capacity = capacity;
         this->chargeLevel = chargeLevel;
@@ -58,6 +63,8 @@ public:
         this->health = health;
         this->cycleCount = cycleCount;
         this->currentVehicle = currentVehicle;
+        this->chargingStart = chargingStart;
+        this->initialCharge = (initialCharge > 0.0 ? initialCharge : chargeLevel);
     }
 
     // -------------------------------------------------------------------------
@@ -71,6 +78,8 @@ public:
         this->health = other.health;
         this->cycleCount = other.cycleCount;
         this->currentVehicle = other.currentVehicle;
+        this->chargingStart = other.chargingStart;
+        this->initialCharge = other.initialCharge;
     }
 
     // -------------------------------------------------------------------------
@@ -130,9 +139,51 @@ public:
         this->currentVehicle = vehicle;
     }
 
+    std::string getChargingStart() const { return chargingStart; }
+    void setChargingStart(const std::string& start) { this->chargingStart = start; }
+
+    double getInitialCharge() const { return initialCharge; }
+    void setInitialCharge(double charge) {
+        if (charge < 0.0) charge = 0.0;
+        if (charge > 100.0) charge = 100.0;
+        this->initialCharge = charge;
+    }
+
     // -------------------------------------------------------------------------
-    // 7. Domain Business Logic Methods
+    // 7. Domain Business Logic Methods & State Transitions
     // -------------------------------------------------------------------------
+    bool isValidTransition(const std::string& targetStatus, const std::string& targetVehicle = "") const {
+        if (targetStatus != "available" && targetStatus != "inuse" && 
+            targetStatus != "charging" && targetStatus != "maintenance" && targetStatus != "unavailable") {
+            return false;
+        }
+        if (targetStatus == status && targetVehicle == currentVehicle) {
+            return true;
+        }
+        if (targetStatus == "inuse") {
+            // Cannot be inuse without an assigned vehicle
+            if (targetVehicle.empty()) return false;
+            // Only available and ready batteries can transition to inuse
+            if (status != "available" || !isReady()) return false;
+            return true;
+        }
+        if (targetStatus == "available") {
+            // An available battery must not have an active vehicle assignment
+            if (!targetVehicle.empty()) return false;
+            // Must have sufficient charge
+            if (chargeLevel < 95.0) return false;
+            return true;
+        }
+        if (targetStatus == "charging") {
+            // A charging battery must be detached from any vehicle
+            if (!targetVehicle.empty()) return false;
+            return true;
+        }
+        if (targetStatus == "maintenance" || targetStatus == "unavailable") {
+            return true;
+        }
+        return false;
+    }
 
     // A battery is "Ready" for swapping only when:
     //  - Status is "available"

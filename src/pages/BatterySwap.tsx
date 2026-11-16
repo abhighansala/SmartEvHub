@@ -17,6 +17,10 @@ import { useTheme, alpha } from '@mui/material/styles';
 
 import SwapHorizOutlined from '@mui/icons-material/SwapHorizOutlined';
 import BatteryFullOutlined from '@mui/icons-material/BatteryFullOutlined';
+import CheckCircleOutline from '@mui/icons-material/CheckCircleOutline';
+import WarningAmberOutlined from '@mui/icons-material/WarningAmberOutlined';
+import HistoryOutlined from '@mui/icons-material/HistoryOutlined';
+import Chip from '@mui/material/Chip';
 
 import PageHeader from '@/components/common/PageHeader';
 import StatusChip from '@/components/common/StatusChip';
@@ -26,10 +30,29 @@ import { useApp } from '@/context/AppContext';
 
 export default function BatterySwap() {
   const theme = useTheme();
-  const { batteries, evs, swapQueue, addSwapRequest, showSnackbar } = useApp();
+  const { batteries, evs, swapQueue, addSwapRequest, showSnackbar, transactions } = useApp();
   const [form, setForm] = useState({ evId: '', currentBattery: '', requiredCapacity: '' });
 
   const availableBatteries = batteries.filter(b => b.status === 'available');
+  const swapTransactions = transactions.filter(t => t.type === 'battery-swap');
+
+  const handleEvChange = (selectedEvId: string) => {
+    const selectedEv = evs.find(e => e.id === selectedEvId);
+    const assignedBat = batteries.find(b => b.currentVehicle === selectedEvId);
+    setForm({
+      evId: selectedEvId,
+      currentBattery: assignedBat ? assignedBat.id : (form.currentBattery || 'BAT-01'),
+      requiredCapacity: selectedEv ? String(selectedEv.batteryCapacity) : (form.requiredCapacity || '40.5'),
+    });
+  };
+
+  const reqCapNum = Number(form.requiredCapacity) || 40.5;
+  const recommendedBattery = form.evId ? (
+    availableBatteries.find(b => Math.abs(b.capacity - reqCapNum) < 0.1 && b.currentCharge >= 95) ||
+    availableBatteries.find(b => b.capacity >= reqCapNum && b.currentCharge >= 95) ||
+    availableBatteries.find(b => b.currentCharge >= 95) ||
+    null
+  ) : null;
 
   const handleSubmit = () => {
     if (!form.evId) { showSnackbar('Please select an EV', 'error'); return; }
@@ -66,7 +89,7 @@ export default function BatterySwap() {
                 select
                 label="EV ID"
                 value={form.evId}
-                onChange={e => setForm(p => ({ ...p, evId: e.target.value }))}
+                onChange={e => handleEvChange(e.target.value)}
                 size="small"
                 sx={{ minWidth: 180 }}
               >
@@ -98,6 +121,49 @@ export default function BatterySwap() {
                 Request Swap
               </Button>
             </Box>
+
+            {form.evId && (
+              <Box
+                sx={{
+                  mt: 2.5,
+                  p: 2,
+                  borderRadius: 2,
+                  border: `1px solid ${recommendedBattery ? alpha(theme.palette.success.main, 0.4) : alpha(theme.palette.warning.main, 0.4)}`,
+                  bgcolor: recommendedBattery ? alpha(theme.palette.success.main, 0.06) : alpha(theme.palette.warning.main, 0.06),
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 1.5,
+                }}
+              >
+                {recommendedBattery ? (
+                  <>
+                    <CheckCircleOutline sx={{ color: theme.palette.success.main }} />
+                    <Box sx={{ flex: 1 }}>
+                      <Typography variant="subtitle2" sx={{ fontWeight: 600, color: theme.palette.success.main }}>
+                        Compatible Replacement: {recommendedBattery.id} ({recommendedBattery.capacity} kWh, {recommendedBattery.currentCharge}% SoC)
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        Healthy replacement pack ready for immediate swap. Old battery will be automatically placed in charging dock.
+                      </Typography>
+                    </Box>
+                    <Chip label="Ready to Swap" size="small" color="success" variant="outlined" sx={{ fontWeight: 600 }} />
+                  </>
+                ) : (
+                  <>
+                    <WarningAmberOutlined sx={{ color: theme.palette.warning.main }} />
+                    <Box sx={{ flex: 1 }}>
+                      <Typography variant="subtitle2" sx={{ fontWeight: 600, color: theme.palette.warning.main }}>
+                        No Ready Batteries (≥95% SoC) Available in Inventory
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        Submitting this request will automatically queue {form.evId} in the FIFO Swap Queue until dock charging completes.
+                      </Typography>
+                    </Box>
+                    <Chip label="Will Queue (FIFO)" size="small" color="warning" variant="outlined" sx={{ fontWeight: 600 }} />
+                  </>
+                )}
+              </Box>
+            )}
           </Card>
         </Grid>
       </Grid>
@@ -129,6 +195,55 @@ export default function BatterySwap() {
                     <TableCell>{req.owner}</TableCell>
                     <TableCell>{req.requiredCapacity} kWh</TableCell>
                     <TableCell>{new Date(req.requestedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        )}
+      </Card>
+
+      {/* Completed Swap History */}
+      <Card sx={{ p: 3, border: `1px solid ${theme.palette.divider}`, mb: 3 }}>
+        <Typography variant="h5" sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+          <HistoryOutlined fontSize="small" />
+          Completed Swap History
+        </Typography>
+        {swapTransactions.length === 0 ? (
+          <EmptyState title="No swap history" description="Completed battery swaps will appear here with transaction and battery details." />
+        ) : (
+          <TableContainer>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Transaction ID</TableCell>
+                  <TableCell>Vehicle ID</TableCell>
+                  <TableCell>Battery / Station</TableCell>
+                  <TableCell align="right">Energy Delivered</TableCell>
+                  <TableCell align="right">Amount</TableCell>
+                  <TableCell>Date & Time</TableCell>
+                  <TableCell>Status</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {swapTransactions.map(txn => (
+                  <TableRow key={txn.id} hover>
+                    <TableCell sx={{ fontWeight: 600 }}>{txn.id}</TableCell>
+                    <TableCell sx={{ fontWeight: 500 }}>{txn.evId}</TableCell>
+                    <TableCell>{txn.stationOrBattery}</TableCell>
+                    <TableCell align="right">{txn.energyDelivered} kWh</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 600, color: theme.palette.success.main }}>
+                      ₹{txn.amount.toFixed(2)}
+                    </TableCell>
+                    <TableCell>
+                      {new Date(txn.date).toLocaleDateString('en-IN', {
+                        day: 'numeric',
+                        month: 'short',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </TableCell>
+                    <TableCell><StatusChip status={txn.status} /></TableCell>
                   </TableRow>
                 ))}
               </TableBody>

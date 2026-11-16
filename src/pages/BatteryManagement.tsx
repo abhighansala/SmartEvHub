@@ -72,16 +72,16 @@ export default function BatteryManagement() {
 
       <Grid container spacing={2.5} sx={{ mb: 3 }}>
         <Grid size={{ xs: 6, md: 3 }}>
-          <StatCard title="Total Batteries" value={batteries.length} icon={BatteryFullOutlined} color={theme.palette.primary.main} />
+          <StatCard title="Total Batteries" value={batteries.length} subtitle="Inventory capacity" icon={BatteryFullOutlined} color={theme.palette.primary.main} />
         </Grid>
         <Grid size={{ xs: 6, md: 3 }}>
-          <StatCard title="Available" value={available} icon={BatteryFullOutlined} color={theme.palette.success.main} />
+          <StatCard title="Available" value={available} subtitle="Ready for swap (≥95%)" icon={BatteryFullOutlined} color={theme.palette.success.main} />
         </Grid>
         <Grid size={{ xs: 6, md: 3 }}>
-          <StatCard title="In Use / Charging" value={inUse + charging} icon={BatteryChargingFullOutlined} color={theme.palette.info.main} />
+          <StatCard title="In Use / Charging" value={inUse + charging} subtitle={`${inUse} deployed • ${charging} charging`} icon={BatteryChargingFullOutlined} color={theme.palette.info.main} />
         </Grid>
         <Grid size={{ xs: 6, md: 3 }}>
-          <StatCard title="Unavailable" value={unavailable} icon={BuildOutlined} color={theme.palette.error.main} />
+          <StatCard title="Unavailable" value={unavailable} subtitle="Under maintenance" icon={BuildOutlined} color={theme.palette.error.main} />
         </Grid>
       </Grid>
 
@@ -123,7 +123,17 @@ export default function BatteryManagement() {
                     </Box>
                   </TableCell>
                   <TableCell><StatusChip status={b.status} /></TableCell>
-                  <TableCell>{b.currentVehicle || '—'}</TableCell>
+                  <TableCell>
+                    {b.currentVehicle ? (
+                      <Typography variant="body2" fontWeight={500}>{b.currentVehicle}</Typography>
+                    ) : b.status === 'charging' ? (
+                      <Typography variant="body2" color="info.main" sx={{ fontStyle: 'italic' }}>
+                        Charging Dock
+                      </Typography>
+                    ) : (
+                      '—'
+                    )}
+                  </TableCell>
                   <TableCell align="right">{b.cycleCount}</TableCell>
                   <TableCell>{new Date(b.lastUpdated).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</TableCell>
                 </TableRow>
@@ -139,6 +149,17 @@ export default function BatteryManagement() {
           <TextField label="Battery ID" value={form.id} onChange={e => setForm(p => ({ ...p, id: e.target.value }))} placeholder="e.g. BAT021" />
           <TextField label="Capacity (kWh)" type="number" value={form.capacity} onChange={e => setForm(p => ({ ...p, capacity: e.target.value }))} />
           <TextField label="Current Charge (%)" type="number" value={form.currentCharge} onChange={e => setForm(p => ({ ...p, currentCharge: e.target.value }))} slotProps={{ htmlInput: { min: 0, max: 100 } }} />
+          <TextField
+            select
+            label="Status"
+            value={form.status}
+            onChange={e => setForm(p => ({ ...p, status: e.target.value as BatteryStatus }))}
+          >
+            <MenuItem value="available">Available</MenuItem>
+            <MenuItem value="charging">Charging</MenuItem>
+            <MenuItem value="inuse">In Use</MenuItem>
+            <MenuItem value="maintenance">Maintenance</MenuItem>
+          </TextField>
           <TextField label="Cycle Count" type="number" value={form.cycleCount} onChange={e => setForm(p => ({ ...p, cycleCount: e.target.value }))} />
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
