@@ -8,6 +8,20 @@
 
 const API_BASE = (import.meta as any).env?.VITE_API_URL || 'http://localhost:8080/api';
 
+let lastAuthExpiredDispatch = 0;
+
+function notifyAuthExpired() {
+  const now = Date.now();
+  // Debounce expiration notifications: maximum once every 3 seconds
+  if (now - lastAuthExpiredDispatch < 3000) {
+    return;
+  }
+  lastAuthExpiredDispatch = now;
+  localStorage.removeItem('authToken');
+  localStorage.removeItem('currentUser');
+  window.dispatchEvent(new Event('evhub-auth-expired'));
+}
+
 // Helper to make fetch requests with auth token, timeout and error handling
 async function request(endpoint: string, options: RequestInit = {}) {
   const url = `${API_BASE}${endpoint}`;
@@ -26,10 +40,13 @@ async function request(endpoint: string, options: RequestInit = {}) {
 
   if (!response.ok) {
     if (response.status === 401 && endpoint !== '/login' && endpoint !== '/register') {
-      // Clear expired token on unauthorized API call
-      localStorage.removeItem('authToken');
-      localStorage.removeItem('currentUser');
-      window.dispatchEvent(new Event('evhub-auth-expired'));
+      const currentToken = localStorage.getItem('authToken');
+      // Only treat as session expiration if:
+      // 1. This request was actually sent with an active token (not an unauthenticated call)
+      // 2. The token sent with this request is STILL the current token in localStorage (not replaced by a new login)
+      if (token && currentToken === token) {
+        notifyAuthExpired();
+      }
     }
     const errorData = await response.json().catch(() => ({}));
     const message = errorData.message || `Request failed with status ${response.status}`;
