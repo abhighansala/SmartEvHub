@@ -10,8 +10,8 @@
 #include <string>
 
 const int MAX_STATIONS = 20;
-const int MAX_SESSIONS = 50;
-const int MAX_REQUESTS = 50;
+const int MAX_SESSIONS = 200;
+const int MAX_REQUESTS = 200;
 
 // Simple Service to manage Charging Stations, Sessions and Requests
 // Uses simple C++ arrays (no vectors)
@@ -128,6 +128,12 @@ public:
                             double& energyDelivered,
                             double& currentCost,
                             int& elapsedSeconds);
+
+    // Advances live charging progression on all active sessions based on constant-power physics.
+    // If a session reaches targetCharge, it automatically completes the session, updates EV SoC,
+    // records the transaction, frees the station bay, and triggers automatic FIFO queue dispatch.
+    // Returns number of sessions automatically completed during this tick.
+    int advanceActiveSessions(ChargingQueue* queue = nullptr);
 
     // Complete active charging session on station/session, record transaction, and automatically dispatch next waiting EV from queue
     bool completeChargingSession(const std::string& stationOrSessionId,

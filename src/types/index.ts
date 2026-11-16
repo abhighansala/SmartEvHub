@@ -78,6 +78,7 @@ export interface ChargingSession {
   elapsedSeconds?: number;
   power?: number;
   efficiency?: number;
+  remainingMinutes?: number;
 }
 
 // ─── Transaction Types ───────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Grid from '@mui/material/Grid2';
 import Card from '@mui/material/Card';
@@ -34,7 +34,20 @@ import type { Station } from '@/types';
 export default function ChargingStations() {
   const theme = useTheme();
   const navigate = useNavigate();
-  const { stations, evs, currentUser, refreshBackendData, showSnackbar } = useApp();
+  const { stations, evs, sessions, currentUser, refreshBackendData, showSnackbar } = useApp();
+
+  // Auto-refresh when stations are actively charging or occupied
+  useEffect(() => {
+    const hasActive = stations.some(s => s.status === 'charging') ||
+      sessions.some(s => s.status === 'active');
+    if (!hasActive) return;
+
+    const interval = setInterval(() => {
+      refreshBackendData();
+    }, 4000);
+
+    return () => clearInterval(interval);
+  }, [stations, sessions, refreshBackendData]);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selectedStation, setSelectedStation] = useState<Station | null>(null);
@@ -59,7 +72,9 @@ export default function ChargingStations() {
 
   // Calculate tariff preview
   const estimatedKWh = selectedEV ? Math.max(0, ((targetCharge - selectedEV.currentCharge) / 100) * selectedEV.batteryCapacity) : 0;
-  const estimatedCost = estimatedKWh * 20.0; // ₹20 / kWh standard tariff
+  // Tariff preview using Agreev Singh's tariff model (OOP Lab 1 & 10)
+  // Base rate of ₹18/kWh. If energy > 30 kWh, 10% discount on units above 30. Minimum floor ₹100.
+  const estimatedCost = estimatedKWh <= 0 ? 0 : Math.max(100, estimatedKWh <= 30 ? estimatedKWh * 18.0 : 30.0 * 18.0 + (estimatedKWh - 30.0) * 18.0 * 0.90);
 
   const openRequestModal = (station?: Station) => {
     setSelectedStation(station || null);
@@ -134,7 +149,20 @@ export default function ChargingStations() {
       />
 
       <Grid container spacing={2.5}>
-        {stations.map(station => (
+        {stations.map(station => {
+          const activeSession = sessions.find(s => s.stationId === station.id && s.status === 'active');
+          const currentEvId = station.currentEV || activeSession?.evId;
+          const currentEvObj = currentEvId ? evs.find(e => e.id === currentEvId) : null;
+          const evDisplay = currentEvId
+            ? (currentEvObj ? `${currentEvObj.model} (${currentEvId})` : currentEvId)
+            : (station.status === 'maintenance'
+                ? 'Under Maintenance'
+                : station.status === 'offline'
+                ? 'Station Offline'
+                : 'None (Available)');
+          const effectiveStatus = (activeSession && station.status === 'available') ? 'charging' : station.status;
+
+          return (
           <Grid key={station.id} size={{ xs: 12, sm: 6, lg: 4 }}>
             <Card
               sx={{
@@ -170,7 +198,7 @@ export default function ChargingStations() {
                     <Typography variant="caption" color="text.secondary">{station.id} • {station.location}</Typography>
                   </Box>
                 </Box>
-                <StatusChip status={station.status} />
+                <StatusChip status={effectiveStatus} />
               </Box>
 
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
@@ -185,7 +213,7 @@ export default function ChargingStations() {
                 <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
                   <Typography variant="body2" color="text.secondary">Current EV</Typography>
                   <Typography variant="body2" fontWeight={500}>
-                    {station.currentEV || 'None (Available)'}
+                    {evDisplay}
                   </Typography>
                 </Box>
               </Box>
@@ -199,7 +227,7 @@ export default function ChargingStations() {
                 >
                   View Details
                 </Button>
-                {station.status === 'available' ? (
+                {effectiveStatus === 'available' ? (
                   <Button
                     size="small"
                     variant="contained"
@@ -229,7 +257,8 @@ export default function ChargingStations() {
               </Box>
             </Card>
           </Grid>
-        ))}
+          );
+        })}
       </Grid>
 
       {/* Request Charging Dialog */}
