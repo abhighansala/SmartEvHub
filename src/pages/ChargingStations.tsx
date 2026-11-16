@@ -187,7 +187,7 @@ export default function ChargingStations() {
                   <Typography variant="body2" fontWeight={500}>
                     {station.status === 'available'
                       ? 'None (Available)'
-                      : (station.currentEV || (station.status === 'charging' ? 'Occupied' : 'None'))}
+                      : (station.currentEV || 'None')}
                   </Typography>
                 </Box>
               </Box>

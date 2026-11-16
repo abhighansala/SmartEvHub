@@ -865,10 +865,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return first;
   }, [isBackendOnline, swapQueue, batteries, refreshBackendData, showSnackbar]);
 
-  const removeSwapRequest = useCallback((id: string) => {
-    setSwapQueue(prev => prev.filter(r => r.id !== id));
+  const removeSwapRequest = useCallback(async (id: string) => {
+    const item = swapQueue.find(r => r.id === id || r.evId === id);
+    const targetEvId = item?.evId || id;
+
+    if (isBackendOnline) {
+      try {
+        const res = await api.cancelSwap(targetEvId);
+        if (res && res.success) {
+          showSnackbar(res.message || `Swap request for ${targetEvId} cancelled`, 'success');
+          await refreshBackendData();
+          return;
+        }
+      } catch (err) {
+        // Fall back to local removal if endpoint errors
+      }
+    }
+
+    setSwapQueue(prev => prev.filter(r => r.id !== id && r.evId !== id));
     showSnackbar('Swap request removed');
-  }, [showSnackbar]);
+  }, [isBackendOnline, swapQueue, refreshBackendData, showSnackbar]);
 
   const addSwapRequest = useCallback(async (req: Omit<SwapRequest, 'id' | 'requestedAt'>) => {
     if (isBackendOnline) {

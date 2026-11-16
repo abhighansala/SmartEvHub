@@ -331,6 +331,13 @@ export const api = {
     return request('/swap/available-count');
   },
 
+  async cancelSwap(evId: string) {
+    return request('/swap/cancel', {
+      method: 'POST',
+      body: JSON.stringify({ evId }),
+    });
+  },
+
   // 8. Transactions & Reports (Agreev Singh module)
   async getTransactions(type?: string) {
     const query = type ? `?type=${encodeURIComponent(type)}` : '';

@@ -185,6 +185,7 @@ bool BatteryService::performSwap(const std::string& evId, const std::string& old
     double energyDelivered = outGivenBattery.getCapacity() * 0.8;
     int duration = 5; // standard swap time in minutes
     std::string desc = "Battery swap: fresh " + newBatteryId + " (" + std::to_string((int)outGivenBattery.getCapacity()) + " kWh)";
+    int evUserId = -1;
 
     // Step 2: Database updates if SQLite is active (Atomic Transaction with Rollback)
     if (db != nullptr && db->isOpen()) {
@@ -231,10 +232,23 @@ bool BatteryService::performSwap(const std::string& evId, const std::string& old
             if (rc == SQLITE_DONE) okEV = true;
         }
 
+        // Query owner user_id from EV table
+        std::string sqlFindUser = "SELECT user_id FROM EV WHERE id = ?;";
+        sqlite3_stmt* stmtFU = nullptr;
+        if (sqlite3_prepare_v2(handle, sqlFindUser.c_str(), -1, &stmtFU, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(stmtFU, 1, evId.c_str(), -1, SQLITE_STATIC);
+            if (sqlite3_step(stmtFU) == SQLITE_ROW) {
+                if (sqlite3_column_type(stmtFU, 0) != SQLITE_NULL) {
+                    evUserId = sqlite3_column_int(stmtFU, 0);
+                }
+            }
+            sqlite3_finalize(stmtFU);
+        }
+
         // 2d. Insert completed TransactionLog record
         bool okTxn = false;
-        std::string sqlTxn = "INSERT INTO TransactionLog (id, vehicle_id, type, station_or_battery, description, amount, energy_delivered, duration, timestamp, status) "
-                             "VALUES (?, ?, 'battery-swap', ?, ?, ?, ?, ?, datetime('now'), 'completed');";
+        std::string sqlTxn = "INSERT INTO TransactionLog (id, vehicle_id, type, station_or_battery, description, amount, energy_delivered, duration, timestamp, status, user_id) "
+                             "VALUES (?, ?, 'battery-swap', ?, ?, ?, ?, ?, datetime('now'), 'completed', ?);";
         sqlite3_stmt* stmtTxn = nullptr;
         if (sqlite3_prepare_v2(handle, sqlTxn.c_str(), -1, &stmtTxn, nullptr) == SQLITE_OK) {
             sqlite3_bind_text(stmtTxn, 1, txnId.c_str(), -1, SQLITE_STATIC);
@@ -244,6 +258,11 @@ bool BatteryService::performSwap(const std::string& evId, const std::string& old
             sqlite3_bind_double(stmtTxn, 5, swapAmount);
             sqlite3_bind_double(stmtTxn, 6, energyDelivered);
             sqlite3_bind_int(stmtTxn, 7, duration);
+            if (evUserId > 0) {
+                sqlite3_bind_int(stmtTxn, 8, evUserId);
+            } else {
+                sqlite3_bind_null(stmtTxn, 8);
+            }
             int rc = sqlite3_step(stmtTxn);
             sqlite3_finalize(stmtTxn);
             if (rc == SQLITE_DONE) okTxn = true;
@@ -273,7 +292,7 @@ bool BatteryService::performSwap(const std::string& evId, const std::string& old
     }
 
     if (outTxn != nullptr) {
-        *outTxn = Transaction(txnId, evId, "battery-swap", newBatteryId, desc, swapAmount, energyDelivered, duration, "completed");
+        *outTxn = Transaction(txnId, evId, "battery-swap", newBatteryId, desc, swapAmount, energyDelivered, duration, "", "completed", (evUserId > 0 ? evUserId : 0));
     }
 
     std::cout << "[Battery Service] Swap successful: EV " << evId
@@ -399,6 +418,31 @@ bool BatteryService::dispatchNextSwapIfAvailable(SwapQueue& queue, Battery& outG
         return processNextSwap(queue, outGivenBattery, outTxn, txnStack);
     }
     return false;
+}
+
+// ----------------------------------------------------------------------------
+// 12. Cancel waiting swap for an EV
+// ----------------------------------------------------------------------------
+bool BatteryService::cancelWaitingSwap(const std::string& evId, SwapQueue& queue) {
+    bool removedFromQueue = queue.remove(evId);
+
+    bool updatedDb = false;
+    if (db != nullptr && db->isOpen()) {
+        sqlite3* handle = db->getDbHandle();
+        std::string sql = "UPDATE EV SET status = 'available', last_activity = datetime('now') WHERE id = ? AND status = 'swapping';";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(handle, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, evId.c_str(), -1, SQLITE_STATIC);
+            int rc = sqlite3_step(stmt);
+            int changes = sqlite3_changes(handle);
+            sqlite3_finalize(stmt);
+            if (rc == SQLITE_DONE && changes > 0) {
+                updatedDb = true;
+            }
+        }
+    }
+
+    return removedFromQueue || updatedDb;
 }
 
 

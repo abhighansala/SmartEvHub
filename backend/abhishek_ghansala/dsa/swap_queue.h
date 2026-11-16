@@ -49,6 +49,9 @@ public:
 
     // Check if vehicleId is already waiting in queue
     bool contains(const std::string& vehicleId) const;
+
+    // Remove specific vehicle from queue (cancellation)
+    bool remove(const std::string& vehicleId);
 };
 
 #endif

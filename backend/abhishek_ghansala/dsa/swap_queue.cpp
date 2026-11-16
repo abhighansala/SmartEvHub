@@ -86,3 +86,31 @@ bool SwapQueue::contains(const std::string& vehicleId) const {
     }
     return false;
 }
+
+bool SwapQueue::remove(const std::string& vehicleId) {
+    if (isEmpty()) return false;
+    int foundPos = -1;
+    for (int i = 0; i < currentSize; i++) {
+        int idx = (frontIndex + i) % SWAP_QUEUE_CAPACITY;
+        if (items[idx] == vehicleId) {
+            foundPos = i;
+            break;
+        }
+    }
+    if (foundPos == -1) return false;
+
+    // Shift elements after foundPos forward by 1
+    for (int i = foundPos; i < currentSize - 1; i++) {
+        int currIdx = (frontIndex + i) % SWAP_QUEUE_CAPACITY;
+        int nextIdx = (frontIndex + i + 1) % SWAP_QUEUE_CAPACITY;
+        items[currIdx] = items[nextIdx];
+    }
+    currentSize--;
+    if (currentSize == 0) {
+        frontIndex = 0;
+        rearIndex = -1;
+    } else {
+        rearIndex = (rearIndex - 1 + SWAP_QUEUE_CAPACITY) % SWAP_QUEUE_CAPACITY;
+    }
+    return true;
+}

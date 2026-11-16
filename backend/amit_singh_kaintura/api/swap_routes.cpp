@@ -163,4 +163,38 @@ void registerSwapRoutes(crow::App<crow::CORSHandler>& app,
         res["message"] = std::to_string(readyCount) + " battery(ies) ready for immediate swap";
         return crow::response(200, res);
     });
+
+    // -------------------------------------------------------------------------
+    // 4. POST /api/swap/cancel - Cancel a waiting swap request
+    // -------------------------------------------------------------------------
+    CROW_ROUTE(app, "/api/swap/cancel").methods(crow::HTTPMethod::POST)
+    ([&batteryService, &swapQueue](const crow::request& req) {
+        crow::json::wvalue res;
+        auto json = crow::json::load(req.body);
+        if (!json || !json.has("evId")) {
+            res["success"] = false;
+            res["message"] = "Field 'evId' is required in JSON payload";
+            return crow::response(400, res);
+        }
+
+        std::string evId = std::string(json["evId"].s());
+        if (evId.empty()) {
+            res["success"] = false;
+            res["message"] = "Vehicle ID cannot be empty";
+            return crow::response(400, res);
+        }
+
+        if (batteryService.cancelWaitingSwap(evId, swapQueue)) {
+            res["success"] = true;
+            res["message"] = "Swap request for vehicle " + evId + " cancelled successfully";
+            res["queueSize"] = swapQueue.getSize();
+            res["frontIndex"] = swapQueue.getFrontIndex();
+            res["rearIndex"] = swapQueue.getRearIndex();
+            return crow::response(200, res);
+        } else {
+            res["success"] = false;
+            res["message"] = "Could not cancel swap request for vehicle " + evId + " (not in queue or not in swapping status)";
+            return crow::response(400, res);
+        }
+    });
 }

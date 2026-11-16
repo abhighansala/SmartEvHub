@@ -44,7 +44,11 @@ int main() {
     assert(sQueue.isEmpty() == true);
     sQueue.enqueue("SWAP-1");
     assert(sQueue.peek() == "SWAP-1");
-    assert(sQueue.dequeue() == "SWAP-1");
+    sQueue.enqueue("SWAP-2");
+    assert(sQueue.contains("SWAP-2") == true);
+    assert(sQueue.remove("SWAP-1") == true);
+    assert(sQueue.peek() == "SWAP-2");
+    assert(sQueue.dequeue() == "SWAP-2");
     assert(sQueue.isEmpty() == true);
     std::cout << "[PASS] SwapQueue passed.\n";
 

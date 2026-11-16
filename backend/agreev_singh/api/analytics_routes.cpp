@@ -59,10 +59,10 @@ void registerAnalyticsRoutes(crow::App<crow::CORSHandler>& app, TransactionServi
         }
 
         // Station Utilization (matches Reports.tsx stationUtilization: { station, utilization })
-        const char* stations[6] = {"S01", "S02", "S03", "S04", "S05", "S06"};
-        int utilPercentages[6]  = {65, 85, 72, 90, 78, 45};
+        const char* stations[4] = {"CS-1", "CS-2", "CS-3", "CS-4"};
+        int utilPercentages[4]  = {85, 65, 72, 20};
 
-        for (int i = 0; i < 6; i++) {
+        for (int i = 0; i < 4; i++) {
             res["stationUtilization"][i]["station"]     = stations[i];
             res["stationUtilization"][i]["utilization"] = utilPercentages[i];
         }

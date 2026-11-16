@@ -1115,6 +1115,29 @@ bool StationService::allocateBayManually(const std::string& requestId,
         return false;
     }
 
+    std::string evModel = "Electric Vehicle";
+    double evCapacity = 50.0;
+    double evCurrentCharge = 20.0;
+    std::string evQuerySql = "SELECT model, battery_capacity, current_charge FROM EV WHERE id = ?;";
+    sqlite3_stmt* eqStmt = nullptr;
+    if (sqlite3_prepare_v2(handle, evQuerySql.c_str(), -1, &eqStmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(eqStmt, 1, req.getVehicleId().c_str(), -1, SQLITE_STATIC);
+        if (sqlite3_step(eqStmt) == SQLITE_ROW) {
+            const char* mTxt = (const char*)sqlite3_column_text(eqStmt, 0);
+            if (mTxt) evModel = mTxt;
+            evCapacity = sqlite3_column_double(eqStmt, 1);
+            evCurrentCharge = sqlite3_column_double(eqStmt, 2);
+        }
+        sqlite3_finalize(eqStmt);
+    }
+
+    double targetChg = req.getTargetCharge();
+    if (targetChg <= evCurrentCharge) {
+        targetChg = std::min(100.0, evCurrentCharge + 20.0);
+    }
+    double energyEst = std::max(0.0, ((targetChg - evCurrentCharge) / 100.0) * evCapacity);
+    double costEst = Transaction::calculateTariff(energyEst, "charging");
+
     std::string updEv = "UPDATE EV SET status = 'charging', last_activity = datetime('now') WHERE id = ?;";
     sqlite3_stmt* evStmt = nullptr;
     if (sqlite3_prepare_v2(handle, updEv.c_str(), -1, &evStmt, nullptr) == SQLITE_OK) {
@@ -1126,15 +1149,18 @@ bool StationService::allocateBayManually(const std::string& requestId,
     std::string sesId = "SES-" + std::to_string(s_sessionCounter++) + "-" + std::to_string(time(nullptr) % 10000);
     std::string insSes = "INSERT INTO ChargingSession (id, vehicle_id, ev_model, station_id, start_time, end_time, "
                          "battery_start, battery_end, target_charge, energy_consumed, estimated_cost, status, user_id, request_id) "
-                         "VALUES (?, ?, 'Electric Vehicle', ?, datetime('now'), NULL, 20.0, NULL, ?, 0.0, 150.0, 'active', ?, ?);";
+                         "VALUES (?, ?, ?, ?, datetime('now'), NULL, ?, NULL, ?, 0.0, ?, 'active', ?, ?);";
     sqlite3_stmt* sesStmt = nullptr;
     if (sqlite3_prepare_v2(handle, insSes.c_str(), -1, &sesStmt, nullptr) == SQLITE_OK) {
         sqlite3_bind_text(sesStmt, 1, sesId.c_str(), -1, SQLITE_STATIC);
         sqlite3_bind_text(sesStmt, 2, req.getVehicleId().c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_text(sesStmt, 3, stationId.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_double(sesStmt, 4, req.getTargetCharge());
-        sqlite3_bind_int(sesStmt, 5, req.getUserId());
-        sqlite3_bind_text(sesStmt, 6, requestId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(sesStmt, 3, evModel.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(sesStmt, 4, stationId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_double(sesStmt, 5, evCurrentCharge);
+        sqlite3_bind_double(sesStmt, 6, targetChg);
+        sqlite3_bind_double(sesStmt, 7, costEst);
+        sqlite3_bind_int(sesStmt, 8, req.getUserId());
+        sqlite3_bind_text(sesStmt, 9, requestId.c_str(), -1, SQLITE_STATIC);
         sqlite3_step(sesStmt);
         sqlite3_finalize(sesStmt);
     }

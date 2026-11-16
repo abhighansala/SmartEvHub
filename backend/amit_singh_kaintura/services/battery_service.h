@@ -93,6 +93,9 @@ public:
     // Process oldest queued swap if a ready battery is available
     bool dispatchNextSwapIfAvailable(SwapQueue& queue, Battery& outGivenBattery, Transaction& outTxn, TransactionStack* txnStack = nullptr);
 
+    // Cancel a waiting swap request: removes from queue and resets EV status to 'available'
+    bool cancelWaitingSwap(const std::string& evId, SwapQueue& queue);
+
     // -------------------------------------------------------------------------
     // 5. Inventory Mutation Operations (Add, Update, Charge)
     // -------------------------------------------------------------------------
