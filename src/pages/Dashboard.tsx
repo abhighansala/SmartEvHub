@@ -228,7 +228,7 @@ export default function Dashboard() {
               <Grid size={{ xs: 12, md: 6 }}>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
                   <Typography variant="body2" color="text.secondary">
-                    Battery Progress: {userActiveSession.batteryStart}% → {Math.round(userActiveSession.currentCharge ?? userActiveSession.batteryStart)}%
+                    Battery Progress: {userActiveSession.batteryStart}% → {Math.round(userActiveSession.batteryEnd ?? (userActiveSession as any).currentCharge ?? userActiveSession.batteryStart)}%
                   </Typography>
                   <Typography variant="body2" fontWeight={600} color="primary.main">
                     Target: {userActiveSession.targetCharge}%
@@ -236,7 +236,7 @@ export default function Dashboard() {
                 </Box>
                 <LinearProgress
                   variant="determinate"
-                  value={userActiveSession.currentCharge ?? userActiveSession.batteryStart}
+                  value={userActiveSession.batteryEnd ?? (userActiveSession as any).currentCharge ?? userActiveSession.batteryStart}
                   sx={{
                     height: 12,
                     borderRadius: 6,
@@ -731,10 +731,7 @@ export default function Dashboard() {
               </TableHead>
               <TableBody>
                 {activeSessions.map(s => {
-                  const progress = Math.min(
-                    s.batteryStart + (s.targetCharge - s.batteryStart) * 0.6,
-                    s.targetCharge
-                  );
+                  const progress = s.batteryEnd ?? (s as any).currentCharge ?? s.batteryStart;
                   return (
                     <TableRow key={s.id}>
                       <TableCell sx={{ fontWeight: 500 }}>{s.evId}</TableCell>

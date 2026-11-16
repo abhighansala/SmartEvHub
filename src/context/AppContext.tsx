@@ -270,10 +270,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
         });
       }
 
-      // Update SQLite entity states
+      // Update SQLite entity states with monotonic safeguards for active operations
       let effectiveEVs = evsRef.current;
       if (backendEVs && Array.isArray(backendEVs)) {
-        setEVs(backendEVs);
+        setEVs(prevEVs => {
+          return backendEVs.map(bEv => {
+            const existing = prevEVs.find(p => p.id === bEv.id);
+            if (!existing) return bEv;
+            // Prevent charging EV battery charge from decreasing on server poll
+            if (bEv.status === 'charging' || existing.status === 'charging') {
+              return {
+                ...bEv,
+                currentCharge: Math.max(existing.currentCharge, bEv.currentCharge),
+              };
+            }
+            return bEv;
+          });
+        });
         effectiveEVs = backendEVs;
       }
       if (backendStations && Array.isArray(backendStations)) {
@@ -286,7 +299,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setTransactions(backendTxns);
       }
       if (backendSessions && Array.isArray(backendSessions)) {
-        setSessions(backendSessions);
+        setSessions(prevSessions => {
+          return backendSessions.map(bSes => {
+            const existing = prevSessions.find(p => p.id === bSes.id);
+            if (!existing) return bSes;
+            if (bSes.status === 'active') {
+              const prevProgress = existing.batteryEnd ?? (existing as any).currentCharge ?? existing.batteryStart;
+              const backendProgress = bSes.batteryEnd ?? (bSes as any).currentCharge ?? bSes.batteryStart;
+              // Monotonic progress guarantee: active charging session progress never decreases
+              const mergedProgress = Math.max(prevProgress, backendProgress);
+              return {
+                ...bSes,
+                batteryEnd: mergedProgress,
+                energyConsumed: Math.max(existing.energyConsumed || 0, bSes.energyConsumed || 0),
+                estimatedCost: Math.max(existing.estimatedCost || 0, bSes.estimatedCost || 0),
+              };
+            }
+            return bSes;
+          });
+        });
       }
       if (backendRequests && Array.isArray(backendRequests)) {
         const mappedReqs: ChargingRequest[] = backendRequests.map((r: any) => {

@@ -47,14 +47,31 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
                 s["endTime"] = list[i].getEndTime();
             }
             s["batteryStart"] = list[i].getBatteryStart();
-            if (list[i].getStatus() == "active" && list[i].getBatteryEnd() <= 0.0) {
-                s["batteryEnd"] = nullptr;
+            if (list[i].getStatus() == "active") {
+                ChargingSession progSession;
+                double currentSoC = list[i].getBatteryStart();
+                double energyDelivered = 0.0;
+                double currentCost = list[i].getEstimatedCost();
+                int elapsedSeconds = 0;
+                if (stationService.getSessionProgress(list[i].getId(), progSession, currentSoC, energyDelivered, currentCost, elapsedSeconds)) {
+                    s["currentCharge"] = currentSoC;
+                    s["batteryEnd"] = currentSoC;
+                    s["energyConsumed"] = energyDelivered;
+                    s["estimatedCost"] = currentCost;
+                    s["elapsedSeconds"] = elapsedSeconds;
+                } else {
+                    s["currentCharge"] = list[i].getBatteryStart();
+                    s["batteryEnd"] = list[i].getBatteryStart();
+                    s["energyConsumed"] = list[i].getEnergyConsumed();
+                    s["estimatedCost"] = list[i].getEstimatedCost();
+                }
             } else {
+                s["currentCharge"] = list[i].getBatteryEnd();
                 s["batteryEnd"] = list[i].getBatteryEnd();
+                s["energyConsumed"] = list[i].getEnergyConsumed();
+                s["estimatedCost"] = list[i].getEstimatedCost();
             }
             s["targetCharge"] = list[i].getTargetCharge();
-            s["energyConsumed"] = list[i].getEnergyConsumed();
-            s["estimatedCost"] = list[i].getEstimatedCost();
             s["status"] = list[i].getStatus();
             s["userId"] = list[i].getUserId();
             s["requestId"] = list[i].getRequestId();
@@ -93,7 +110,25 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
             s["startTime"] = list[i].getStartTime();
             s["endTime"] = nullptr;
             s["batteryStart"] = list[i].getBatteryStart();
-            s["batteryEnd"] = nullptr;
+
+            ChargingSession progSession;
+            double currentSoC = list[i].getBatteryStart();
+            double energyDelivered = 0.0;
+            double currentCost = list[i].getEstimatedCost();
+            int elapsedSeconds = 0;
+            if (stationService.getSessionProgress(list[i].getId(), progSession, currentSoC, energyDelivered, currentCost, elapsedSeconds)) {
+                s["currentCharge"] = currentSoC;
+                s["batteryEnd"] = currentSoC;
+                s["energyConsumed"] = energyDelivered;
+                s["estimatedCost"] = currentCost;
+                s["elapsedSeconds"] = elapsedSeconds;
+            } else {
+                s["currentCharge"] = list[i].getBatteryStart();
+                s["batteryEnd"] = list[i].getBatteryStart();
+                s["energyConsumed"] = list[i].getEnergyConsumed();
+                s["estimatedCost"] = list[i].getEstimatedCost();
+            }
+
             s["targetCharge"] = list[i].getTargetCharge();
             s["energyConsumed"] = list[i].getEnergyConsumed();
             s["estimatedCost"] = list[i].getEstimatedCost();

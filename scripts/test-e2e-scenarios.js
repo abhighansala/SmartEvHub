@@ -1095,8 +1095,12 @@ async function runAllScenarios() {
     targetCharge: 80.0
   });
   assert(reqARes.statusCode === 200, 'POST /api/charging/request succeeds for Customer A');
-  if (freeStation) {
+  const qCheck = await request({ hostname: 'localhost', port: 8080, path: '/api/charging/queue', method: 'GET' });
+  const qItems = (qCheck.data && qCheck.data.items) ? qCheck.data.items : [];
+  if (freeStation && qItems.length === 0) {
     assert(reqARes.data.allocated === true || !!reqARes.data.sessionId, 'Assertion 4: Available compatible station was automatically allocated immediately');
+  } else {
+    assert(reqARes.data.allocated === true || reqARes.data.queued === true, 'Assertion 4: Request allocated or enqueued according to FIFO ordering');
   }
 
   // Assertion 5: Incompatible bays (e.g. CCS2 vs Type 2) are not allocated

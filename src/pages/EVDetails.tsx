@@ -73,10 +73,13 @@ export default function EVDetails() {
   }
 
   const evTransactions = transactions.filter(t => t.evId === ev.id);
-  const evSession = sessions.find(s => s.evId === ev.id);
+  const evSession = sessions.find(s => s.evId === ev.id && s.status === 'active');
+  const liveCharge = evSession
+    ? Math.max(ev.currentCharge, Math.round(evSession.batteryEnd ?? (evSession as any).currentCharge ?? evSession.batteryStart))
+    : ev.currentCharge;
 
-  const batteryColor = ev.currentCharge < 20 ? theme.palette.error.main
-    : ev.currentCharge < 50 ? theme.palette.warning.main
+  const batteryColor = liveCharge < 20 ? theme.palette.error.main
+    : liveCharge < 50 ? theme.palette.warning.main
     : theme.palette.success.main;
 
   return (
@@ -136,14 +139,14 @@ export default function EVDetails() {
                     borderRadius: '50%',
                     border: `8px solid ${batteryColor}`,
                     borderColor: `${batteryColor} transparent transparent transparent`,
-                    transform: `rotate(${ev.currentCharge * 3.6 - 90}deg)`,
+                    transform: `rotate(${liveCharge * 3.6 - 90}deg)`,
                     transition: 'transform 1s ease',
                   },
                 }}
               >
                 <Box sx={{ textAlign: 'center' }}>
                   <Typography variant="h1" sx={{ color: batteryColor, fontWeight: 700 }}>
-                    {ev.currentCharge}%
+                    {liveCharge}%
                   </Typography>
                 </Box>
               </Box>
@@ -161,7 +164,7 @@ export default function EVDetails() {
             >
               <Box
                 sx={{
-                  width: `${ev.currentCharge}%`,
+                  width: `${liveCharge}%`,
                   height: '100%',
                   borderRadius: 6,
                   bgcolor: batteryColor,
