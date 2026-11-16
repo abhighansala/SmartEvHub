@@ -151,14 +151,15 @@ int main(int argc, char* argv[])
     std::cout << "\n[Server Ready] Listening on http://localhost:" << port << "\n";
     std::cout << "Press Ctrl+C to stop the server.\n\n";
 
-    // Background progression worker: advances live charging sessions every 2 seconds
+    // Background progression worker: advances live charging sessions and battery charging docks every 2 seconds
     std::atomic<bool> serverRunning{true};
-    std::thread progressionWorker([&stationService, &chargingQueue, &serverRunning]() {
+    std::thread progressionWorker([&stationService, &batteryService, &chargingQueue, &swapQueue, &txnStack, &serverRunning]() {
         while (serverRunning.load()) {
             std::this_thread::sleep_for(std::chrono::seconds(2));
             if (!serverRunning.load()) break;
             try {
                 stationService.advanceActiveSessions(&chargingQueue);
+                batteryService.advanceChargingBatteries(&swapQueue, &txnStack);
             } catch (...) {
             }
         }

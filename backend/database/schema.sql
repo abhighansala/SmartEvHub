@@ -63,6 +63,8 @@ CREATE TABLE IF NOT EXISTS Battery (
     cycle_count INTEGER DEFAULT 0,
     current_vehicle TEXT DEFAULT NULL,
     last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
+    charging_start DATETIME DEFAULT NULL,
+    initial_charge REAL DEFAULT 20.0,
     FOREIGN KEY(current_vehicle) REFERENCES EV(id) ON DELETE SET NULL
 );
 
@@ -167,14 +169,14 @@ INSERT OR IGNORE INTO ChargingStation (id, name, power, connector_type, status, 
 ('CS-4', 'AC Type 2 Charger 4', 26.0, 'Type 2', 'maintenance', NULL, NULL, 'Bay B-2', 1, 0);
 
 -- Batteries for Swap Inventory
-INSERT OR IGNORE INTO Battery (id, capacity, charge_level, status, health, cycle_count, current_vehicle, last_updated) VALUES
-('BAT-01', 50.0, 100.0, 'available', 98.5, 42, NULL, datetime('now')),
-('BAT-02', 50.0, 100.0, 'available', 97.0, 58, NULL, datetime('now')),
-('BAT-03', 60.0, 100.0, 'available', 99.2, 18, NULL, datetime('now')),
-('BAT-04', 50.0, 44.0, 'charging', 95.0, 89, NULL, datetime('now', '-1 hour')),
-('BAT-05', 40.0, 15.0, 'charging', 92.4, 120, NULL, datetime('now', '-45 minutes')),
-('BAT-06', 70.0, 88.0, 'inuse', 96.8, 65, 'EV-103', datetime('now', '-2 hours')),
-('BAT-07', 50.0, 10.0, 'maintenance', 81.0, 240, NULL, datetime('now', '-1 day'));
+INSERT OR IGNORE INTO Battery (id, capacity, charge_level, status, health, cycle_count, current_vehicle, last_updated, charging_start, initial_charge) VALUES
+('BAT-01', 50.0, 100.0, 'available', 98.5, 42, NULL, datetime('now'), NULL, 100.0),
+('BAT-02', 50.0, 100.0, 'available', 97.0, 58, NULL, datetime('now'), NULL, 100.0),
+('BAT-03', 60.0, 100.0, 'available', 99.2, 18, NULL, datetime('now'), NULL, 100.0),
+('BAT-04', 50.0, 44.0, 'charging', 95.0, 89, NULL, datetime('now', '-1 hour'), datetime('now', '-1 hour'), 20.0),
+('BAT-05', 40.0, 15.0, 'charging', 92.4, 120, NULL, datetime('now', '-45 minutes'), datetime('now', '-45 minutes'), 10.0),
+('BAT-06', 70.0, 88.0, 'inuse', 96.8, 65, 'EV-103', datetime('now', '-2 hours'), NULL, 88.0),
+('BAT-07', 50.0, 10.0, 'maintenance', 81.0, 240, NULL, datetime('now', '-1 day'), NULL, 10.0);
 
 -- Charging Requests (Customer Intake Seed)
 INSERT OR IGNORE INTO ChargingRequest (id, user_id, vehicle_id, station_id, bay_id, target_charge, status, created_at) VALUES

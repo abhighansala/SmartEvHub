@@ -368,8 +368,151 @@ int main() {
     restartDb.close();
     std::remove(dbFile.c_str());
 
+    // -------------------------------------------------------------------------
+    // TEST 15: Battery Swap Lifecycle, Ownership, Charging Simulation & Anomaly Reconciliation
+    // -------------------------------------------------------------------------
+    std::cout << "\n[TEST 15] Testing Battery Swap Lifecycle, Ownership & Simulation...\n";
+    std::string lifecycleDbFile = "test_lifecycle.db";
+    std::remove(lifecycleDbFile.c_str());
+    Database lifeDb(lifecycleDbFile);
+    assert(lifeDb.open());
+    assert(lifeDb.initSchema("backend/database/schema.sql") || lifeDb.initSchema("../database/schema.sql") || lifeDb.initSchema("database/schema.sql"));
+
+    BatteryService lifeService(&lifeDb);
+    lifeService.setSimulationSpeedMultiplier(20.0);
+    lifeService.setChargingPower(25.0);
+
+    sqlite3* lHandle = lifeDb.getDbHandle();
+
+    // 15.1 Successful battery swap with installed battery detection & old battery recharging
+    // Setup EV-USER-9 (User 9, 18% SoC, current battery BAT-01)
+    sqlite3_exec(lHandle, "INSERT OR REPLACE INTO EV (id, owner_name, model, battery_capacity, current_charge, status, user_id) "
+                          "VALUES ('EV-USER-9', 'Rahul Sharma', 'Nexon EV', 50.0, 18.0, 'available', 9);", nullptr, nullptr, nullptr);
+    sqlite3_exec(lHandle, "UPDATE Battery SET status = 'inuse', current_vehicle = 'EV-USER-9', charge_level = 18.0 WHERE id = 'BAT-01';", nullptr, nullptr, nullptr);
+
+    // Swap requested by User 9 (owner)
+    Battery freshBat;
+    Transaction swapTx;
+    bool swapRes = lifeService.performSwap("EV-USER-9", "", 50.0, freshBat, &swapTx, 9, "user");
+    assert(swapRes == true && "Owner must be allowed to swap their vehicle");
+    assert(freshBat.getId() == "BAT-02" && "Should allocate next available 50kWh battery");
+
+    // Verify BAT-02 is inuse by EV-USER-9
+    Battery chkFresh;
+    assert(lifeService.getBatteryById("BAT-02", chkFresh));
+    assert(chkFresh.getStatus() == "inuse" && chkFresh.getCurrentVehicle() == "EV-USER-9");
+
+    // Verify BAT-01 was detached and transitioned to charging
+    Battery chkOld;
+    assert(lifeService.getBatteryById("BAT-01", chkOld));
+    assert(chkOld.getStatus() == "charging" && chkOld.getCurrentVehicle().empty());
+    assert(chkOld.getChargeLevel() == 18.0);
+    std::cout << "  -> 15.1 Successful swap verified: fresh BAT-02 assigned, old BAT-01 detached and placed in charging dock.\n";
+
+    // 15.2 Unauthorized user attempting another user's swap
+    Battery unauthBat;
+    Transaction unauthTx;
+    bool unauthRes = lifeService.performSwap("EV-USER-9", "", 50.0, unauthBat, &unauthTx, 10, "user");
+    assert(!unauthRes && "User 10 must NOT be allowed to swap User 9's vehicle");
+    std::cout << "  -> 15.2 Ownership authorization guard verified: unauthorized user swap rejected.\n";
+
+    // Operator and Admin can swap any vehicle
+    bool adminSwap = lifeService.performSwap("EV-USER-9", "", 50.0, unauthBat, &unauthTx, 2, "operator");
+    assert(adminSwap == true && "Operator must be allowed to swap customer vehicle");
+    std::cout << "  -> 15.3 Operator privilege verified: operator allowed to execute vehicle swap.\n";
+
+    // 15.4 Battery already assigned to another vehicle cannot be assigned
+    Battery assignedBat;
+    assert(lifeService.getBatteryById(unauthBat.getId(), assignedBat));
+    assert(!assignedBat.isReady() && "In-use battery must not be reported as ready for swap");
+    assert(assignedBat.getStatus() == "inuse" && assignedBat.getCurrentVehicle() == "EV-USER-9");
+    std::cout << "  -> 15.4 Busy battery protection verified: already-assigned battery excluded from swap.\n";
+
+    // 15.5 Insufficient charge (< 95%) and degraded health (< 80%) rejected
+    sqlite3_exec(lHandle, "UPDATE Battery SET status = 'available', charge_level = 85.0 WHERE id = 'BAT-03';", nullptr, nullptr, nullptr);
+    Battery bLow;
+    assert(lifeService.getBatteryById("BAT-03", bLow));
+    assert(!bLow.isReady() && "Battery with 85% charge must not be ready");
+
+    sqlite3_exec(lHandle, "UPDATE Battery SET status = 'available', charge_level = 100.0, health = 75.0 WHERE id = 'BAT-03';", nullptr, nullptr, nullptr);
+    Battery bDeg;
+    assert(lifeService.getBatteryById("BAT-03", bDeg));
+    assert(!bDeg.isReady() && "Battery with 75% SoH must not be ready");
+    std::cout << "  -> 15.5 Health & charge threshold verified: low SoC and degraded SoH rejected from swap.\n";
+
+    // 15.6 Multi-battery anomaly reconciliation
+    // Deliberately simulate anomaly: assign both BAT-03 and BAT-07 to EV-MULTI
+    sqlite3_exec(lHandle, "INSERT OR REPLACE INTO EV (id, owner_name, model, battery_capacity, current_charge, status, user_id) "
+                          "VALUES ('EV-MULTI', 'Multi Driver', 'Fleet Van', 50.0, 50.0, 'available', 15);", nullptr, nullptr, nullptr);
+    sqlite3_exec(lHandle, "UPDATE Battery SET current_vehicle = 'EV-MULTI', status = 'inuse', charge_level = 100.0, last_updated = datetime('now', '-10 minutes') WHERE id = 'BAT-03';", nullptr, nullptr, nullptr);
+    sqlite3_exec(lHandle, "UPDATE Battery SET current_vehicle = 'EV-MULTI', status = 'inuse', charge_level = 100.0, last_updated = datetime('now') WHERE id = 'BAT-07';", nullptr, nullptr, nullptr);
+    lifeService.reconcileInventory();
+
+    Battery multi1, multi2;
+    assert(lifeService.getBatteryById("BAT-07", multi1));
+    assert(lifeService.getBatteryById("BAT-03", multi2));
+    assert(multi1.getCurrentVehicle() == "EV-MULTI" && "Newer battery remains assigned to EV-MULTI");
+    assert(multi2.getCurrentVehicle().empty() && "Older duplicate battery detached from vehicle");
+    std::cout << "  -> 15.6 Multi-battery anomaly reconciliation verified: duplicate vehicle assignment resolved.\n";
+
+    // 15.7 Automatic transition from Charging to Available and FIFO swap queue progression
+    // Place BAT-01 in charging dock at 90% charge with start_time 10 minutes ago
+    // At 20x multiplier: 10 mins * 20x = 200 mins = 3.33 hours -> charges to 100%
+    sqlite3_exec(lHandle, "UPDATE Battery SET status = 'charging', charge_level = 90.0, initial_charge = 90.0, "
+                          "charging_start = datetime('now', '-600 seconds'), current_vehicle = NULL WHERE id = 'BAT-01';", nullptr, nullptr, nullptr);
+
+    // Enqueue waiting vehicle in SwapQueue
+    SwapQueue autoQueue;
+    sqlite3_exec(lHandle, "INSERT OR REPLACE INTO EV (id, owner_name, model, battery_capacity, current_charge, status, user_id) "
+                          "VALUES ('EV-WAIT-SWP', 'Queued Driver', 'Ioniq 5', 50.0, 10.0, 'swapping', 11);", nullptr, nullptr, nullptr);
+    autoQueue.enqueue("EV-WAIT-SWP");
+
+    TransactionStack lifeStack;
+    int advanced = lifeService.advanceChargingBatteries(&autoQueue, &lifeStack);
+    assert(advanced >= 1 && "At least 1 battery must transition from charging to available");
+    
+    // EV-WAIT-SWP should have been auto-dispatched
+    assert(autoQueue.isEmpty() && "Auto-queue should be dispatched when battery becomes available");
+    sqlite3_stmt* checkWaitEv = nullptr;
+    sqlite3_prepare_v2(lHandle, "SELECT status, current_charge FROM EV WHERE id = 'EV-WAIT-SWP';", -1, &checkWaitEv, nullptr);
+    assert(sqlite3_step(checkWaitEv) == SQLITE_ROW);
+    std::string waitEvStat = (const char*)sqlite3_column_text(checkWaitEv, 0);
+    double waitEvChg = sqlite3_column_double(checkWaitEv, 1);
+    sqlite3_finalize(checkWaitEv);
+    assert(waitEvStat == "available" && "Waiting EV must be set to available after auto-swap");
+    assert(waitEvChg == 100.0 && "Waiting EV must have 100% charge after auto-swap");
+    std::cout << "  -> 15.7 Charging simulation & auto-dispatch verified: battery charged and auto-swapped to queued vehicle.\n";
+
+    // 15.8 Database persistence across restart
+    lifeDb.close();
+    Database reopenedLifeDb(lifecycleDbFile);
+    assert(reopenedLifeDb.open());
+    BatteryService restartedLifeService(&reopenedLifeDb);
+
+    // Verify the auto-swapped vehicle has its newly assigned battery persisted in SQLite
+    sqlite3_stmt* wStmt = nullptr;
+    std::string assignedBatId = "";
+    sqlite3_prepare_v2(reopenedLifeDb.getDbHandle(), "SELECT id FROM Battery WHERE current_vehicle = 'EV-WAIT-SWP';", -1, &wStmt, nullptr);
+    if (sqlite3_step(wStmt) == SQLITE_ROW) {
+        const char* t = (const char*)sqlite3_column_text(wStmt, 0);
+        if (t) assignedBatId = t;
+    }
+    sqlite3_finalize(wStmt);
+    assert(!assignedBatId.empty() && "A fresh battery must be assigned to EV-WAIT-SWP");
+
+    Battery persistedBatAfter;
+    assert(restartedLifeService.getBatteryById(assignedBatId, persistedBatAfter));
+    assert(persistedBatAfter.getCurrentVehicle() == "EV-WAIT-SWP" && "Auto-swapped battery survived DB close & reopen");
+    assert(persistedBatAfter.getStatus() == "inuse");
+
+    reopenedLifeDb.close();
+    std::remove(lifecycleDbFile.c_str());
+    std::remove((lifecycleDbFile + "-wal").c_str());
+    std::remove((lifecycleDbFile + "-shm").c_str());
+    std::cout << "  -> 15.8 Restart persistence verified: battery and vehicle states survived restart.\n";
+
     std::cout << "\n========================================================\n";
-    std::cout << " >>> ALL 14 TEST SUITES PASSED FOR AMIT SINGH KAINTURA! <<<\n";
+    std::cout << " >>> ALL 15 TEST SUITES PASSED FOR AMIT SINGH KAINTURA! <<<\n";
     std::cout << "========================================================\n";
     return 0;
 }

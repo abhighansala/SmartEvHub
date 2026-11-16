@@ -1,4 +1,5 @@
 #include "battery_routes.h"
+#include "../../aditya_singh/security/jwt_util.h"
 
 // ============================================================================
 // Smart EV Hub - Battery REST API Endpoints
@@ -18,7 +19,10 @@ void registerBatteryRoutes(crow::App<crow::CORSHandler>& app,
     // 1. GET /api/batteries - List all replacement batteries in inventory
     // -------------------------------------------------------------------------
     CROW_ROUTE(app, "/api/batteries").methods(crow::HTTPMethod::GET)
-    ([&batteryService]() {
+    ([&batteryService, swapQueue, txnStack]() {
+        // Automatically advance charging batteries and dispatch any queued swaps
+        batteryService.advanceChargingBatteries(swapQueue, txnStack);
+
         Battery list[MAX_BATTERIES];
         int count = batteryService.getAllBatteries(list, MAX_BATTERIES);
 
@@ -31,6 +35,9 @@ void registerBatteryRoutes(crow::App<crow::CORSHandler>& app,
             res[i]["health"] = list[i].getHealth();
             res[i]["cycleCount"] = list[i].getCycleCount();
             res[i]["currentVehicle"] = list[i].getCurrentVehicle();
+            res[i]["chargingStart"] = list[i].getChargingStart();
+            res[i]["initialCharge"] = list[i].getInitialCharge();
+            res[i]["isReady"] = list[i].isReady();
         }
 
         return crow::response(200, res);
@@ -40,7 +47,9 @@ void registerBatteryRoutes(crow::App<crow::CORSHandler>& app,
     // 2. GET /api/batteries/<id> - Get details of a single battery by ID
     // -------------------------------------------------------------------------
     CROW_ROUTE(app, "/api/batteries/<string>").methods(crow::HTTPMethod::GET)
-    ([&batteryService](std::string id) {
+    ([&batteryService, swapQueue, txnStack](std::string id) {
+        batteryService.advanceChargingBatteries(swapQueue, txnStack);
+
         Battery battery;
         if (batteryService.getBatteryById(id, battery)) {
             crow::json::wvalue res;
@@ -51,6 +60,8 @@ void registerBatteryRoutes(crow::App<crow::CORSHandler>& app,
             res["health"] = battery.getHealth();
             res["cycleCount"] = battery.getCycleCount();
             res["currentVehicle"] = battery.getCurrentVehicle();
+            res["chargingStart"] = battery.getChargingStart();
+            res["initialCharge"] = battery.getInitialCharge();
             res["isReady"] = battery.isReady();
             return crow::response(200, res);
         } else {
@@ -66,6 +77,20 @@ void registerBatteryRoutes(crow::App<crow::CORSHandler>& app,
     // -------------------------------------------------------------------------
     CROW_ROUTE(app, "/api/batteries").methods(crow::HTTPMethod::POST)
     ([&batteryService, swapQueue, txnStack](const crow::request& req) {
+        crow::response authRes;
+        security::JwtClaims claims;
+        if (!security::JwtUtil::requireAuth(req, authRes, claims)) {
+            return authRes;
+        }
+
+        // Only Operator or Admin can register new batteries
+        if (claims.role == "user") {
+            crow::json::wvalue err;
+            err["success"] = false;
+            err["message"] = "Access forbidden: only operators and administrators can register batteries";
+            return crow::response(403, err);
+        }
+
         crow::json::wvalue res;
         auto body = crow::json::load(req.body);
         if (!body) {
@@ -114,6 +139,20 @@ void registerBatteryRoutes(crow::App<crow::CORSHandler>& app,
     // -------------------------------------------------------------------------
     CROW_ROUTE(app, "/api/batteries/<string>").methods(crow::HTTPMethod::PUT)
     ([&batteryService, swapQueue, txnStack](const crow::request& req, std::string id) {
+        crow::response authRes;
+        security::JwtClaims claims;
+        if (!security::JwtUtil::requireAuth(req, authRes, claims)) {
+            return authRes;
+        }
+
+        // Only Operator or Admin can modify battery inventory
+        if (claims.role == "user") {
+            crow::json::wvalue err;
+            err["success"] = false;
+            err["message"] = "Access forbidden: only operators and administrators can update batteries";
+            return crow::response(403, err);
+        }
+
         crow::json::wvalue res;
         auto body = crow::json::load(req.body);
         if (!body) {
@@ -129,12 +168,34 @@ void registerBatteryRoutes(crow::App<crow::CORSHandler>& app,
             return crow::response(404, res);
         }
 
+        std::string targetStatus = existing.getStatus();
+        std::string targetVehicle = existing.getCurrentVehicle();
+        if (body.has("status")) targetStatus = std::string(body["status"].s());
+        if (body.has("currentVehicle")) targetVehicle = std::string(body["currentVehicle"].s());
+
+        // Lifecycle State Transition Validation
+        if (!existing.isValidTransition(targetStatus, targetVehicle)) {
+            res["success"] = false;
+            res["message"] = "Invalid battery state transition: cannot transition status from '" + 
+                             existing.getStatus() + "' to '" + targetStatus + "' with vehicle '" + targetVehicle + "'";
+            return crow::response(400, res);
+        }
+
         if (body.has("capacity")) existing.setCapacity(body["capacity"].d());
         if (body.has("currentCharge")) existing.setChargeLevel(body["currentCharge"].d());
-        if (body.has("status")) existing.setStatus(std::string(body["status"].s()));
+        existing.setStatus(targetStatus);
+        existing.setCurrentVehicle(targetVehicle);
         if (body.has("health")) existing.setHealth(body["health"].d());
         if (body.has("cycleCount")) existing.setCycleCount(body["cycleCount"].i());
-        if (body.has("currentVehicle")) existing.setCurrentVehicle(std::string(body["currentVehicle"].s()));
+
+        if (targetStatus == "charging") {
+            existing.setChargingStart(std::to_string(time(nullptr)));
+            existing.setInitialCharge(existing.getChargeLevel());
+            existing.setCurrentVehicle("");
+        } else if (targetStatus == "available") {
+            existing.setChargingStart("");
+            existing.setCurrentVehicle("");
+        }
 
         batteryService.updateBattery(existing);
 
