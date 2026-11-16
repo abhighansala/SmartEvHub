@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import Box from '@mui/material/Box';
 import Card from '@mui/material/Card';
@@ -11,10 +12,15 @@ import { useTheme, alpha } from '@mui/material/styles';
 import ArrowBackOutlined from '@mui/icons-material/ArrowBackOutlined';
 import StopCircleOutlined from '@mui/icons-material/StopCircleOutlined';
 import ElectricBoltOutlined from '@mui/icons-material/ElectricBoltOutlined';
+<<<<<<< HEAD
 import CheckCircleOutline from '@mui/icons-material/CheckCircleOutline';
 import BuildOutlined from '@mui/icons-material/BuildOutlined';
 import PowerOffOutlined from '@mui/icons-material/PowerOffOutlined';
 import HourglassTopOutlined from '@mui/icons-material/HourglassTopOutlined';
+=======
+import BuildOutlined from '@mui/icons-material/BuildOutlined';
+import PowerOffOutlined from '@mui/icons-material/PowerOffOutlined';
+>>>>>>> origin/main
 
 import PageHeader from '@/components/common/PageHeader';
 import StatusChip from '@/components/common/StatusChip';
@@ -25,7 +31,11 @@ export default function StationDetails() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const theme = useTheme();
+<<<<<<< HEAD
   const { stations, sessions, completeSession, releaseStation, currentUser } = useApp();
+=======
+  const { stations, sessions, completeSession, refreshBackendData } = useApp();
+>>>>>>> origin/main
 
   const station = stations.find(s => s.id === id);
   if (!station) {
@@ -39,18 +49,32 @@ export default function StationDetails() {
     );
   }
 
-  const session = sessions.find(s => s.stationId === station.id && s.status === 'active');
+  const session = sessions.find(
+    s => (s.stationId === station.id || (station.currentEV && s.evId === station.currentEV)) && s.status === 'active'
+  );
 
-  const getDuration = (start: string) => {
-    const diff = Date.now() - new Date(start).getTime();
+  const isOccupied = station.status === 'charging' || !!session;
+
+  // Real-time synchronization when station is occupied
+  useEffect(() => {
+    if (!isOccupied) return;
+    const interval = setInterval(() => {
+      refreshBackendData();
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [isOccupied, refreshBackendData]);
+
+  const getDuration = (start?: string | null) => {
+    if (!start) return 'Active';
+    const diff = Math.max(0, Date.now() - new Date(start).getTime());
     const h = Math.floor(diff / 3600000);
     const m = Math.round((diff % 3600000) / 60000);
     return h > 0 ? `${h}h ${m}m` : `${m}m`;
   };
 
   const progress = session
-    ? (session.batteryEnd ?? session.batteryStart)
-    : 0;
+    ? (session.currentCharge ?? (session.batteryEnd ?? session.batteryStart))
+    : 50;
 
   return (
     <Box>
@@ -95,8 +119,12 @@ export default function StationDetails() {
 
         <Grid size={{ xs: 12, md: 7 }}>
           <Card sx={{ p: 3, border: `1px solid ${theme.palette.divider}`, height: '100%' }}>
+<<<<<<< HEAD
             {/* Case 1: Station is actively charging and current user owns this session */}
             {station.status === 'charging' && session ? (
+=======
+            {isOccupied ? (
+>>>>>>> origin/main
               <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
                 <Box
                   sx={{
@@ -118,7 +146,7 @@ export default function StationDetails() {
                   </Typography>
                   <LinearProgress
                     variant="determinate"
-                    value={progress}
+                    value={Math.min(100, Math.max(0, progress))}
                     sx={{
                       mt: 2,
                       height: 12,
@@ -128,21 +156,28 @@ export default function StationDetails() {
                     }}
                   />
                   <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                    Target: {session.targetCharge}%
+                    Target: {session?.targetCharge || 85}%
+                    {session?.simulatedRemainingMinutes != null && session.simulatedRemainingMinutes > 0 && (
+                      <> • {session.speedMultiplier && session.speedMultiplier > 1 ? `${session.simulatedRemainingMinutes}m simulated (~${session.demoRemainingMinutes || Math.ceil(session.simulatedRemainingMinutes / session.speedMultiplier)}m demo)` : `${session.simulatedRemainingMinutes}m remaining`}</>
+                    )}
                   </Typography>
                 </Box>
 
-                <Box sx={{ display: 'flex', gap: 4 }}>
+                <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap', justifyContent: 'center' }}>
                   <Box sx={{ textAlign: 'center' }}>
-                    <Typography variant="h4">{session.evId}</Typography>
+                    <Typography variant="h4">{session?.evId || station.currentEV || 'Electric Vehicle'}</Typography>
                     <Typography variant="caption" color="text.secondary">Vehicle</Typography>
                   </Box>
                   <Box sx={{ textAlign: 'center' }}>
-                    <Typography variant="h4">{getDuration(session.startTime)}</Typography>
+                    <Typography variant="h4">{getDuration(session?.startTime || station.sessionStart)}</Typography>
                     <Typography variant="caption" color="text.secondary">Duration</Typography>
                   </Box>
                   <Box sx={{ textAlign: 'center' }}>
-                    <Typography variant="h4">₹{session.estimatedCost.toFixed(0)}</Typography>
+                    <Typography variant="h4">{(session?.energyConsumed || 0).toFixed(1)} kWh</Typography>
+                    <Typography variant="caption" color="text.secondary">Delivered</Typography>
+                  </Box>
+                  <Box sx={{ textAlign: 'center' }}>
+                    <Typography variant="h4">₹{(session?.estimatedCost || 0).toFixed(0)}</Typography>
                     <Typography variant="caption" color="text.secondary">Est. Cost</Typography>
                   </Box>
                 </Box>
@@ -151,11 +186,12 @@ export default function StationDetails() {
                   variant="contained"
                   color="error"
                   startIcon={<StopCircleOutlined />}
-                  onClick={() => completeSession(session.id)}
+                  onClick={() => completeSession(session ? session.id : station.id)}
                 >
                   Stop Session
                 </Button>
               </Box>
+<<<<<<< HEAD
             ) : station.status === 'charging' ? (
               /* Case 2: Station is charging another customer's vehicle */
               <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 2.5, py: 4, textAlign: 'center' }}>
@@ -205,6 +241,10 @@ export default function StationDetails() {
             ) : station.status === 'maintenance' ? (
               /* Case 3: Maintenance */
               <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 2.5, py: 4, textAlign: 'center' }}>
+=======
+            ) : station.status === 'maintenance' ? (
+              <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 2, py: 4 }}>
+>>>>>>> origin/main
                 <Box
                   sx={{
                     width: 80,
@@ -216,6 +256,7 @@ export default function StationDetails() {
                     justifyContent: 'center',
                   }}
                 >
+<<<<<<< HEAD
                   <BuildOutlined sx={{ fontSize: 40, color: theme.palette.warning.main }} />
                 </Box>
                 <Box>
@@ -239,17 +280,33 @@ export default function StationDetails() {
             ) : station.status === 'offline' ? (
               /* Case 4: Offline */
               <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 2.5, py: 4, textAlign: 'center' }}>
+=======
+                  <BuildOutlined sx={{ fontSize: 36, color: theme.palette.warning.main }} />
+                </Box>
+                <Typography variant="h4">Station Under Maintenance</Typography>
+                <Typography variant="body2" color="text.secondary" textAlign="center">
+                  This charging bay is currently undergoing scheduled technical maintenance and is temporarily unavailable.
+                </Typography>
+              </Box>
+            ) : station.status === 'offline' ? (
+              <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 2, py: 4 }}>
+>>>>>>> origin/main
                 <Box
                   sx={{
                     width: 80,
                     height: 80,
                     borderRadius: '50%',
+<<<<<<< HEAD
                     bgcolor: alpha(theme.palette.error.main, 0.1),
+=======
+                    bgcolor: alpha(theme.palette.text.disabled, 0.1),
+>>>>>>> origin/main
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                   }}
                 >
+<<<<<<< HEAD
                   <PowerOffOutlined sx={{ fontSize: 40, color: theme.palette.error.main }} />
                 </Box>
                 <Box>
@@ -269,6 +326,14 @@ export default function StationDetails() {
                     Set Bay Available
                   </Button>
                 )}
+=======
+                  <PowerOffOutlined sx={{ fontSize: 36, color: theme.palette.text.secondary }} />
+                </Box>
+                <Typography variant="h4">Station Offline</Typography>
+                <Typography variant="body2" color="text.secondary" textAlign="center">
+                  This station is currently offline and not communicating with the charging network.
+                </Typography>
+>>>>>>> origin/main
               </Box>
             ) : (
               /* Case 5: Available */

@@ -154,16 +154,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
     const stored = localStorage.getItem('currentUser');
-    return stored ? JSON.parse(stored) : null;
+    const token = localStorage.getItem('authToken');
+    return (stored && token) ? JSON.parse(stored) : null;
   });
   const isAuthenticated = !!currentUser;
 
   const login = useCallback((user: User, token?: string) => {
-    setCurrentUser(user);
-    localStorage.setItem('currentUser', JSON.stringify(user));
     if (token) {
       localStorage.setItem('authToken', token);
     }
+    localStorage.setItem('currentUser', JSON.stringify(user));
+    setCurrentUser(user);
     showSnackbar(`Welcome back, ${user.name}!`, 'success');
   }, [showSnackbar]);
 
@@ -175,25 +176,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch (e) {
       // Ignore network errors on logout
     }
-    setCurrentUser(null);
     localStorage.removeItem('currentUser');
     localStorage.removeItem('authToken');
+    setCurrentUser(null);
     setEVs([]);
+    setChargingRequests([]);
     showSnackbar('Logged out successfully', 'info');
   }, [isBackendOnline, showSnackbar]);
 
   // Handle Token Expiration events from API Client
   useEffect(() => {
     const handleExpired = () => {
-      setCurrentUser(null);
+      const hadUser = !!localStorage.getItem('currentUser') || !!currentUser;
       localStorage.removeItem('currentUser');
       localStorage.removeItem('authToken');
+      setCurrentUser(null);
       setEVs([]);
-      showSnackbar('Your session has expired. Please sign in again.', 'warning');
+      setChargingRequests([]);
+      if (hadUser) {
+        showSnackbar('Your session has expired. Please sign in again.', 'warning');
+      }
     };
     window.addEventListener('evhub-auth-expired', handleExpired);
     return () => window.removeEventListener('evhub-auth-expired', handleExpired);
-  }, [showSnackbar]);
+  }, [currentUser, showSnackbar]);
 
   // Validate stored JWT on initial boot
   useEffect(() => {
@@ -211,10 +217,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
           localStorage.removeItem('authToken');
           localStorage.removeItem('currentUser');
           setCurrentUser(null);
+          setEVs([]);
+          setChargingRequests([]);
         });
     }
   }, []);
 
+<<<<<<< HEAD
   // In-flight guard and EV state reference to prevent re-fetch cascade loops
   const isRefreshingRef = useRef(false);
   const evsRef = useRef(evs);
@@ -228,21 +237,43 @@ export function AppProvider({ children }: { children: ReactNode }) {
     isRefreshingRef.current = true;
 
     try {
+=======
+  const evsRef = React.useRef(evs);
+  useEffect(() => {
+    evsRef.current = evs;
+  }, [evs]);
+
+  // Synchronize with C++ Crow Backend
+  const refreshBackendData = useCallback(async () => {
+    try {
+      await api.checkHealth();
+      setIsBackendOnline(true);
+
+      const token = localStorage.getItem('authToken');
+
+>>>>>>> origin/main
       // Fetch live DSA Queues, Stack, entities, sessions & transactions in parallel
       const [cQueue, sQueue, tStack, backendEVs, backendStations, backendBatteries, backendTxns, backendSessions, backendRequests] = await Promise.all([
         api.getChargingQueue().catch(() => null),
         api.getSwapQueue().catch(() => null),
         api.getTransactionStack().catch(() => null),
-        api.getEVs().catch(() => null),
+        token ? api.getEVs().catch(() => null) : Promise.resolve(null),
         api.getStations().catch(() => null),
         api.getBatteries().catch(() => null),
         api.getTransactions().catch(() => null),
         api.getSessions().catch(() => null),
-        api.getChargingRequests().catch(() => null),
+        token ? api.getChargingRequests().catch(() => null) : Promise.resolve(null),
       ]);
 
+<<<<<<< HEAD
       const hasBackendResponded = !!(cQueue || sQueue || tStack || backendEVs || backendStations || backendBatteries || backendTxns || backendSessions);
       setIsBackendOnline(hasBackendResponded);
+=======
+      if (!token) {
+        setEVs([]);
+        setChargingRequests([]);
+      }
+>>>>>>> origin/main
 
       if (cQueue) {
         setChargingQueueMeta({
@@ -270,7 +301,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         });
       }
 
+<<<<<<< HEAD
       // Update SQLite entity states with monotonic safeguards for active operations
+=======
+      // Update SQLite entity states
+>>>>>>> origin/main
       let effectiveEVs = evsRef.current;
       if (backendEVs && Array.isArray(backendEVs)) {
         setEVs(prevEVs => {
@@ -344,7 +379,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
         });
         setChargingRequests(mappedReqs);
       }
-
 
       // Hydrate visual queues from C++ array buffers
       if (cQueue && Array.isArray(cQueue.items)) {

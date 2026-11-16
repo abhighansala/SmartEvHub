@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import Box from '@mui/material/Box';
 import Card from '@mui/material/Card';
 import Grid from '@mui/material/Grid2';
@@ -30,7 +30,11 @@ import type { Transaction } from '@/types';
 
 export default function Transactions() {
   const theme = useTheme();
-  const { transactions, transactionStackMeta, evs } = useApp();
+  const { transactions, transactionStackMeta, evs, refreshBackendData } = useApp();
+
+  useEffect(() => {
+    refreshBackendData();
+  }, [refreshBackendData]);
   const [tab, setTab] = useState(0);
   const [search, setSearch] = useState('');
   const [selectedTxn, setSelectedTxn] = useState<Transaction | null>(null);

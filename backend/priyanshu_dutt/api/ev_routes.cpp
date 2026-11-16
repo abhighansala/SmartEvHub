@@ -1,3 +1,4 @@
+#include <vector>
 #include "ev_routes.h"
 #include "../../aditya_singh/security/jwt_util.h"
 
@@ -12,15 +13,15 @@ void registerEVRoutes(crow::App<crow::CORSHandler>& app, EVService& evService) {
             return res;
         }
 
-        EV list[MAX_EVS];
+        std::vector<EV> list(MAX_EVS);
         int count = 0;
         // Role-based data isolation:
         // Admin and Operator see all EVs in the system.
         // Normal USER accounts only see EVs associated with their authenticated userId.
         if (claims.role == "admin" || claims.role == "operator") {
-            count = evService.getAllEVs(list, MAX_EVS, 0);
+            count = evService.getAllEVs(list.data(), MAX_EVS, 0);
         } else {
-            count = evService.getAllEVs(list, MAX_EVS, claims.userId);
+            count = evService.getAllEVs(list.data(), MAX_EVS, claims.userId);
         }
 
         crow::json::wvalue::list evList;

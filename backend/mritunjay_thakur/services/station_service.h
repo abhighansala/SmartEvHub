@@ -10,8 +10,8 @@
 #include <string>
 
 const int MAX_STATIONS = 20;
-const int MAX_SESSIONS = 50;
-const int MAX_REQUESTS = 50;
+const int MAX_SESSIONS = 200;
+const int MAX_REQUESTS = 200;
 
 // Simple Service to manage Charging Stations, Sessions and Requests
 // Uses simple C++ arrays (no vectors)
@@ -30,8 +30,23 @@ private:
     ChargingRequest requestArray[MAX_REQUESTS];
     int requestCount;
 
+    // Configurable Charging Simulation Parameters
+    double m_speedMultiplier;
+    double m_chargingEfficiency;
+    double m_tariffRate;
+
 public:
     StationService(Database* database = nullptr);
+
+    // Simulation Speed & Physical Configuration
+    void setSimulationSpeedMultiplier(double mult) { m_speedMultiplier = (mult > 0.0) ? mult : 1.0; }
+    double getSimulationSpeedMultiplier() const { return m_speedMultiplier; }
+
+    void setChargingEfficiency(double eff) { m_chargingEfficiency = (eff > 0.0 && eff <= 1.0) ? eff : 0.90; }
+    double getChargingEfficiency() const { return m_chargingEfficiency; }
+
+    void setTariffRate(double rate) { m_tariffRate = (rate >= 0.0) ? rate : 0.0; }
+    double getTariffRate() const { return m_tariffRate; }
 
     // Database schema auto-migration helper
     void ensureSchemaMigrations();
@@ -128,6 +143,12 @@ public:
                             double& energyDelivered,
                             double& currentCost,
                             int& elapsedSeconds);
+
+    // Advances live charging progression on all active sessions based on constant-power physics.
+    // If a session reaches targetCharge, it automatically completes the session, updates EV SoC,
+    // records the transaction, frees the station bay, and triggers automatic FIFO queue dispatch.
+    // Returns number of sessions automatically completed during this tick.
+    int advanceActiveSessions(ChargingQueue* queue = nullptr);
 
     // Complete active charging session on station/session, record transaction, and automatically dispatch next waiting EV from queue
     bool completeChargingSession(const std::string& stationOrSessionId,

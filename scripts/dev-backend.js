@@ -31,6 +31,11 @@ if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
   process.env.JWT_SECRET = 'SmartEvHub_LocalDev_SecretKey_Minimum_32_Characters_2026_Secure!';
 }
 
+// 2b. Ensure demonstration simulation speed multiplier is configured
+if (!process.env.CHARGING_SIMULATION_SPEED_MULTIPLIER) {
+  process.env.CHARGING_SIMULATION_SPEED_MULTIPLIER = '20';
+}
+
 // 3. Ensure executable exists (with automated CMake configuration guard)
 const exePath = ensureBackendBuilt(rootDir);
 

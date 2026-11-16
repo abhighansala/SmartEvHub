@@ -6,7 +6,7 @@
 #include <string>
 
 // Maximum number of EVs stored in simple array
-const int MAX_EVS = 50;
+const int MAX_EVS = 500;
 
 // Simple Service to manage Electric Vehicle operations
 // Uses simple C++ arrays and loops (no complex vectors)

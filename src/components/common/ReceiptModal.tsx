@@ -149,7 +149,11 @@ export default function ReceiptModal({ open, onClose, transaction, evModel }: Re
 
             <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
               <Typography variant="body2" color="text.secondary">Tariff / Rate:</Typography>
-              <Typography variant="body2">₹20.00 / kWh</Typography>
+              <Typography variant="body2" sx={{ textAlign: 'right' }}>
+                {transaction.type === 'battery-swap'
+                  ? '₹300.00 Base + ₹5.00 / kWh'
+                  : '₹18.00 / kWh (Slab discount > 30 kWh, Min ₹100)'}
+              </Typography>
             </Box>
 
             <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>

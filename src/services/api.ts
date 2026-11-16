@@ -9,6 +9,7 @@
 
 const API_BASE = (import.meta as any).env?.VITE_API_URL || 'http://localhost:8080/api';
 
+<<<<<<< HEAD
 // In-flight request deduplication map for GET requests
 const inFlightRequests = new Map<string, Promise<any>>();
 
@@ -23,6 +24,20 @@ const CACHE_TTL_MS = 1500;
 export function clearApiCache() {
   getCache.clear();
   inFlightRequests.clear();
+=======
+let lastAuthExpiredDispatch = 0;
+
+function notifyAuthExpired() {
+  const now = Date.now();
+  // Debounce expiration notifications: maximum once every 3 seconds
+  if (now - lastAuthExpiredDispatch < 3000) {
+    return;
+  }
+  lastAuthExpiredDispatch = now;
+  localStorage.removeItem('authToken');
+  localStorage.removeItem('currentUser');
+  window.dispatchEvent(new Event('evhub-auth-expired'));
+>>>>>>> origin/main
 }
 
 // Helper to make fetch requests with auth token, timeout and error handling
@@ -62,6 +77,7 @@ async function request(endpoint: string, options: RequestInit = {}) {
         headers,
       });
 
+<<<<<<< HEAD
       if (!response.ok) {
         if (response.status === 401 && endpoint !== '/login' && endpoint !== '/register') {
           // Clear expired token on unauthorized API call
@@ -87,6 +103,16 @@ async function request(endpoint: string, options: RequestInit = {}) {
     } finally {
       if (isGet) {
         inFlightRequests.delete(endpoint);
+=======
+  if (!response.ok) {
+    if (response.status === 401 && endpoint !== '/login' && endpoint !== '/register') {
+      const currentToken = localStorage.getItem('authToken');
+      // Only treat as session expiration if:
+      // 1. This request was actually sent with an active token (not an unauthenticated call)
+      // 2. The token sent with this request is STILL the current token in localStorage (not replaced by a new login)
+      if (token && currentToken === token) {
+        notifyAuthExpired();
+>>>>>>> origin/main
       }
     }
   })();
