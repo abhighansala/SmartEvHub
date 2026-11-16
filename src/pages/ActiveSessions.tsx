@@ -53,7 +53,7 @@ export default function ActiveSessions() {
 
     const interval = setInterval(() => {
       refreshBackendData();
-    }, 6000);
+    }, 3000);
 
     return () => clearInterval(interval);
   }, [sessions, refreshBackendData]);
@@ -191,6 +191,7 @@ export default function ActiveSessions() {
                   <TableCell>Start Time</TableCell>
                   <TableCell>Battery Progress</TableCell>
                   <TableCell align="right">Target</TableCell>
+                  <TableCell>Est. Remaining</TableCell>
                   <TableCell>Duration</TableCell>
                   <TableCell align="right">Delivered (kWh)</TableCell>
                   <TableCell align="right">Amount</TableCell>
@@ -201,6 +202,11 @@ export default function ActiveSessions() {
                 {displayedSessions.map(s => {
                   const currentSoC = s.currentCharge ?? (s.batteryEnd ?? s.batteryStart);
                   const isActive = s.status === 'active';
+                  const remainingMins = isActive
+                    ? (s.remainingMinutes != null
+                        ? s.remainingMinutes
+                        : Math.max(0, Math.round((((s.targetCharge - currentSoC) / 100) * 50) / (25 * 0.92) * 60)))
+                    : 0;
 
                   return (
                     <TableRow key={s.id} hover>
@@ -238,6 +244,18 @@ export default function ActiveSessions() {
                         </Box>
                       </TableCell>
                       <TableCell align="right">{s.targetCharge}%</TableCell>
+                      <TableCell>
+                        {isActive ? (
+                          <Chip
+                            label={remainingMins > 0 ? `${remainingMins}m left` : 'Completing...'}
+                            size="small"
+                            color={remainingMins <= 5 ? 'success' : 'default'}
+                            variant="outlined"
+                          />
+                        ) : (
+                          <Typography variant="body2" color="text.secondary">Completed</Typography>
+                        )}
+                      </TableCell>
                       <TableCell>{getDuration(s.startTime, s.endTime)}</TableCell>
                       <TableCell align="right" sx={{ fontWeight: 500 }}>
                         {(s.energyConsumed || 0).toFixed(1)}
@@ -300,19 +318,19 @@ export default function ActiveSessions() {
                 <Typography variant="body2" fontWeight={600}>{stoppingSession.evModel} ({stoppingSession.evId})</Typography>
               </Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                <Typography variant="caption" color="text.secondary">Battery Level:</Typography>
+                <Typography variant="caption" color="text.secondary">Battery Progress:</Typography>
                 <Typography variant="body2" fontWeight={600}>
-                  {stoppingSession.batteryStart}% → {stoppingSession.targetCharge}%
+                  {stoppingSession.batteryStart}% → {Math.round(stoppingSession.currentCharge ?? stoppingSession.batteryEnd ?? stoppingSession.batteryStart)}% (Target: {stoppingSession.targetCharge}%)
                 </Typography>
               </Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                <Typography variant="caption" color="text.secondary">Estimated Energy:</Typography>
+                <Typography variant="caption" color="text.secondary">Energy Delivered:</Typography>
                 <Typography variant="body2" fontWeight={600}>
                   {(stoppingSession.energyConsumed || 0).toFixed(1)} kWh
                 </Typography>
               </Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                <Typography variant="caption" color="text.secondary">Bill Amount:</Typography>
+                <Typography variant="caption" color="text.secondary">Current Tariff / Cost:</Typography>
                 <Typography variant="body2" fontWeight={700} color="primary.main">
                   ₹{(stoppingSession.estimatedCost || 0).toFixed(2)}
                 </Typography>

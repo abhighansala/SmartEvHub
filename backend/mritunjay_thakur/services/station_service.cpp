@@ -2,6 +2,8 @@
 #include <iostream>
 #include <ctime>
 #include <algorithm>
+#include <vector>
+#include <cmath>
 
 static int s_sessionCounter = 1010;
 static int s_requestCounter = 1010;
@@ -1562,6 +1564,119 @@ bool StationService::getSessionProgress(const std::string& sessionId,
     currentCost = Transaction::calculateTariff(gridEnergy, "charging");
 
     return true;
+}
+
+int StationService::advanceActiveSessions(ChargingQueue* queue) {
+    if (db == nullptr || !db->isOpen()) return 0;
+    sqlite3* handle = db->getDbHandle();
+
+    // Query active sessions from SQLite
+    std::string sql = "SELECT id, vehicle_id, station_id, battery_start, target_charge, "
+                      "cast(max(0, strftime('%s', 'now') - strftime('%s', start_time)) as integer) "
+                      "FROM ChargingSession WHERE status = 'active';";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(handle, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK) {
+        return 0;
+    }
+
+    struct ActiveItem {
+        std::string sessionId;
+        std::string evId;
+        std::string stationId;
+        double batteryStart;
+        double targetCharge;
+        int elapsedSeconds;
+    };
+    std::vector<ActiveItem> items;
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char* sId = (const char*)sqlite3_column_text(stmt, 0);
+        const char* vId = (const char*)sqlite3_column_text(stmt, 1);
+        const char* stId = (const char*)sqlite3_column_text(stmt, 2);
+        double bStart = sqlite3_column_double(stmt, 3);
+        double tChg = sqlite3_column_double(stmt, 4);
+        int elapsed = sqlite3_column_int(stmt, 5);
+
+        items.push_back({
+            sId ? sId : "",
+            vId ? vId : "",
+            stId ? stId : "",
+            bStart,
+            (tChg > 0.0 && tChg <= 100.0) ? tChg : 85.0,
+            elapsed
+        });
+    }
+    sqlite3_finalize(stmt);
+
+    int autoCompleted = 0;
+
+    for (const auto& item : items) {
+        // Query station power rating
+        double powerKW = 25.0; // standard fallback
+        ChargingStation st;
+        if (getStationById(item.stationId, st) && st.getPower() > 0.0) {
+            powerKW = st.getPower();
+        }
+
+        // Query EV battery capacity
+        double capacityKWh = 50.0;
+        std::string evCapSql = "SELECT battery_capacity FROM EV WHERE id = ?;";
+        sqlite3_stmt* evStmt = nullptr;
+        if (sqlite3_prepare_v2(handle, evCapSql.c_str(), -1, &evStmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(evStmt, 1, item.evId.c_str(), -1, SQLITE_STATIC);
+            if (sqlite3_step(evStmt) == SQLITE_ROW) {
+                double cap = sqlite3_column_double(evStmt, 0);
+                if (cap > 0.0) capacityKWh = cap;
+            }
+            sqlite3_finalize(evStmt);
+        }
+
+        // Academic Constant-Power physics:
+        double efficiency = 0.92;
+        double elapsedHours = item.elapsedSeconds / 3600.0;
+        double energyStored = powerKW * elapsedHours * efficiency;
+        double currentSoC = item.batteryStart + (energyStored / capacityKWh) * 100.0;
+
+        if (currentSoC < item.batteryStart) currentSoC = item.batteryStart;
+        if (currentSoC > 100.0) currentSoC = 100.0;
+
+        double energyDelivered = ((std::min(currentSoC, item.targetCharge) - item.batteryStart) / 100.0) * capacityKWh;
+        if (energyDelivered < 0.0) energyDelivered = 0.0;
+        double gridEnergy = (efficiency > 0.0) ? (energyDelivered / efficiency) : energyDelivered;
+        double currentCost = Transaction::calculateTariff(gridEnergy, "charging");
+
+        if (currentSoC >= item.targetCharge) {
+            // Target charge reached! Auto-complete session and automatically dispatch FIFO queue
+            ChargingSession completedSession;
+            Transaction completedTxn;
+            if (completeChargingSession(item.sessionId, completedSession, completedTxn, queue)) {
+                autoCompleted++;
+            }
+        } else {
+            // Persist progressive metrics in SQLite for EV and Session
+            std::string updEv = "UPDATE EV SET current_charge = ?, last_activity = datetime('now') WHERE id = ?;";
+            sqlite3_stmt* uEvStmt = nullptr;
+            if (sqlite3_prepare_v2(handle, updEv.c_str(), -1, &uEvStmt, nullptr) == SQLITE_OK) {
+                sqlite3_bind_double(uEvStmt, 1, currentSoC);
+                sqlite3_bind_text(uEvStmt, 2, item.evId.c_str(), -1, SQLITE_STATIC);
+                sqlite3_step(uEvStmt);
+                sqlite3_finalize(uEvStmt);
+            }
+
+            std::string updSes = "UPDATE ChargingSession SET battery_end = ?, energy_consumed = ?, estimated_cost = ? WHERE id = ? AND status = 'active';";
+            sqlite3_stmt* uSesStmt = nullptr;
+            if (sqlite3_prepare_v2(handle, updSes.c_str(), -1, &uSesStmt, nullptr) == SQLITE_OK) {
+                sqlite3_bind_double(uSesStmt, 1, currentSoC);
+                sqlite3_bind_double(uSesStmt, 2, energyDelivered);
+                sqlite3_bind_double(uSesStmt, 3, currentCost);
+                sqlite3_bind_text(uSesStmt, 4, item.sessionId.c_str(), -1, SQLITE_STATIC);
+                sqlite3_step(uSesStmt);
+                sqlite3_finalize(uSesStmt);
+            }
+        }
+    }
+
+    return autoCompleted;
 }
 
 bool StationService::completeChargingSession(const std::string& stationOrSessionId,

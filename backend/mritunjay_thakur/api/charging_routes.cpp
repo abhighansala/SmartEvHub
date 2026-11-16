@@ -9,7 +9,7 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
 
     // GET /api/sessions - Retrieve charging sessions (filtered by user ownership if role is 'user')
     CROW_ROUTE(app, "/api/sessions").methods(crow::HTTPMethod::GET)
-    ([&stationService](const crow::request& req){
+    ([&stationService, &chargingQueue](const crow::request& req){
         std::string authHeader = req.get_header_value("Authorization");
         int userId = 0;
         if (!authHeader.empty()) {
@@ -29,6 +29,9 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
             statusFilter = req.url_params.get("status");
         }
 
+        // Advance live server-side progression and auto-complete any finished sessions
+        stationService.advanceActiveSessions(&chargingQueue);
+
         ChargingSession list[MAX_SESSIONS];
         int count = stationService.getAllSessions(list, MAX_SESSIONS, statusFilter, userId);
 
@@ -47,11 +50,30 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
                 s["endTime"] = list[i].getEndTime();
             }
             s["batteryStart"] = list[i].getBatteryStart();
-            if (list[i].getStatus() == "active" && list[i].getBatteryEnd() <= 0.0) {
-                s["batteryEnd"] = nullptr;
+
+            double currentCharge = list[i].getBatteryStart();
+            if (list[i].getStatus() == "active") {
+                currentCharge = (list[i].getBatteryEnd() > 0.0) ? list[i].getBatteryEnd() : list[i].getBatteryStart();
+                s["batteryEnd"] = currentCharge;
             } else {
-                s["batteryEnd"] = list[i].getBatteryEnd();
+                currentCharge = (list[i].getBatteryEnd() > 0.0) ? list[i].getBatteryEnd() : list[i].getTargetCharge();
+                s["batteryEnd"] = currentCharge;
             }
+            s["currentCharge"] = currentCharge;
+
+            // Estimated remaining minutes calculation
+            int remainingMins = 0;
+            if (list[i].getStatus() == "active" && list[i].getTargetCharge() > currentCharge) {
+                double neededKWh = ((list[i].getTargetCharge() - currentCharge) / 100.0) * 50.0;
+                double powerKW = 25.0;
+                ChargingStation st;
+                if (stationService.getStationById(list[i].getStationId(), st) && st.getPower() > 0.0) {
+                    powerKW = st.getPower();
+                }
+                remainingMins = static_cast<int>(std::ceil((neededKWh / (powerKW * 0.92)) * 60.0));
+            }
+            s["remainingMinutes"] = remainingMins;
+
             s["targetCharge"] = list[i].getTargetCharge();
             s["energyConsumed"] = list[i].getEnergyConsumed();
             s["estimatedCost"] = list[i].getEstimatedCost();
@@ -67,7 +89,7 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
 
     // GET /api/sessions/active - Convenience route for active charging sessions
     CROW_ROUTE(app, "/api/sessions/active").methods(crow::HTTPMethod::GET)
-    ([&stationService](const crow::request& req){
+    ([&stationService, &chargingQueue](const crow::request& req){
         crow::response res;
         security::JwtClaims claims;
         int userId = 0;
@@ -78,6 +100,9 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
         } else {
             return res;
         }
+
+        // Advance live server-side progression and auto-complete any finished sessions
+        stationService.advanceActiveSessions(&chargingQueue);
 
         ChargingSession list[MAX_SESSIONS];
         int count = stationService.getAllSessions(list, MAX_SESSIONS, "active", userId);
@@ -93,7 +118,23 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
             s["startTime"] = list[i].getStartTime();
             s["endTime"] = nullptr;
             s["batteryStart"] = list[i].getBatteryStart();
-            s["batteryEnd"] = nullptr;
+
+            double currentCharge = (list[i].getBatteryEnd() > 0.0) ? list[i].getBatteryEnd() : list[i].getBatteryStart();
+            s["batteryEnd"] = currentCharge;
+            s["currentCharge"] = currentCharge;
+
+            int remainingMins = 0;
+            if (list[i].getTargetCharge() > currentCharge) {
+                double neededKWh = ((list[i].getTargetCharge() - currentCharge) / 100.0) * 50.0;
+                double powerKW = 25.0;
+                ChargingStation st;
+                if (stationService.getStationById(list[i].getStationId(), st) && st.getPower() > 0.0) {
+                    powerKW = st.getPower();
+                }
+                remainingMins = static_cast<int>(std::ceil((neededKWh / (powerKW * 0.92)) * 60.0));
+            }
+            s["remainingMinutes"] = remainingMins;
+
             s["targetCharge"] = list[i].getTargetCharge();
             s["energyConsumed"] = list[i].getEnergyConsumed();
             s["estimatedCost"] = list[i].getEstimatedCost();

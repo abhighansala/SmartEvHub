@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import Box from '@mui/material/Box';
 import Card from '@mui/material/Card';
 import Typography from '@mui/material/Typography';
@@ -57,8 +57,22 @@ export default function ChargingQueue() {
     evs,
     stations,
     currentUser,
+    refreshBackendData,
     showSnackbar,
   } = useApp();
+
+  // Real-time synchronization for FIFO queue positions and automatic bay allocations
+  useEffect(() => {
+    const shouldPoll = chargingRequests.some(r => r.status === 'queued' || r.status === 'allocated') ||
+      chargingQueue.length > 0;
+    if (!shouldPoll) return;
+
+    const interval = setInterval(() => {
+      refreshBackendData();
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [chargingRequests, chargingQueue, refreshBackendData]);
 
   const isOperator = currentUser?.role === 'operator' || currentUser?.role === 'admin';
 
