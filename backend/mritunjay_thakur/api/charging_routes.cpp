@@ -85,6 +85,7 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
 
             s["targetCharge"] = list[i].getTargetCharge();
             s["energyConsumed"] = list[i].getEnergyConsumed();
+            s["duration"] = list[i].getDuration();
             s["estimatedCost"] = list[i].getEstimatedCost();
             s["status"] = list[i].getStatus();
             s["userId"] = list[i].getUserId();
@@ -155,6 +156,7 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
 
             s["targetCharge"] = list[i].getTargetCharge();
             s["energyConsumed"] = list[i].getEnergyConsumed();
+            s["duration"] = list[i].getDuration();
             s["estimatedCost"] = list[i].getEstimatedCost();
             s["status"] = list[i].getStatus();
             s["userId"] = list[i].getUserId();
@@ -386,6 +388,10 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
         res["bayId"] = newRequest.getBayId();
         res["targetCharge"] = newRequest.getTargetCharge();
         res["connectorType"] = newRequest.getConnectorType();
+        res["queuePosition"] = chargingQueue.getSize();
+        res["queueSize"] = chargingQueue.getSize();
+        res["frontIndex"] = chargingQueue.getFrontIndex();
+        res["rearIndex"] = chargingQueue.getRearIndex();
 
         if (allocated) {
             res["sessionId"] = newSession.getId();
@@ -396,8 +402,7 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
             res["session"]["estimatedCost"] = newSession.getEstimatedCost();
             res["message"] = "Assigned to Station " + newRequest.getStationId() + " (" + newRequest.getBayId() + ")";
         } else {
-            res["queueSize"] = chargingQueue.getSize();
-            res["message"] = "All bays currently busy. Added vehicle " + evId + " to FIFO Charging Queue.";
+            res["message"] = "All stations currently busy. Added vehicle " + evId + " to Charging Queue (Position: " + std::to_string(chargingQueue.getSize()) + ").";
         }
 
         return crow::response(200, res);
@@ -577,19 +582,23 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
         ChargingSession completedSession;
         Transaction outTxn;
         ChargingSession dispatchedSession;
+        std::string compError;
 
-        if (stationService.completeChargingSession(identifier, completedSession, outTxn, &chargingQueue, &dispatchedSession, claims.userId, claims.role)) {
+        if (stationService.completeChargingSession(identifier, completedSession, outTxn, &chargingQueue, &dispatchedSession, claims.userId, claims.role, compError)) {
             // Push completed transaction to Abhishek Ghansala's LIFO stack if available
             if (txnStack != nullptr) {
                 txnStack->push(outTxn.getId());
             }
 
             res["success"] = true;
-            res["message"] = "Charging session completed successfully.";
+            res["message"] = "Station " + completedSession.getStationId() + " session completed.";
             res["sessionId"] = completedSession.getId();
+            res["stationId"] = completedSession.getStationId();
+            res["evId"] = completedSession.getVehicleId();
             res["transactionId"] = outTxn.getId();
             res["amount"] = outTxn.getAmount();
             res["energyDelivered"] = outTxn.getEnergyDelivered();
+            res["duration"] = completedSession.getDuration();
             res["finalCharge"] = completedSession.getBatteryEnd();
 
             res["transaction"]["id"] = outTxn.getId();
@@ -600,14 +609,14 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
                 res["dispatched"] = true;
                 res["dispatchedEvId"] = dispatchedSession.getVehicleId();
                 res["dispatchedSessionId"] = dispatchedSession.getId();
-                res["message"] = "Charging session completed. Auto-dispatched waiting vehicle " + dispatchedSession.getVehicleId() + " from FIFO queue.";
+                res["message"] = "Station " + completedSession.getStationId() + " completed. Auto-dispatched waiting vehicle " + dispatchedSession.getVehicleId() + " from FIFO queue.";
             } else {
                 res["dispatched"] = false;
             }
             return crow::response(200, res);
         } else {
             res["success"] = false;
-            res["message"] = "Could not complete charging session. Session may not be active, station already released, or permission denied.";
+            res["message"] = compError.empty() ? ("Could not complete charging session for " + identifier) : compError;
             return crow::response(400, res);
         }
     });

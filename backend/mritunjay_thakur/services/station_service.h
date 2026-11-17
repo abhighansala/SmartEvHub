@@ -9,13 +9,14 @@
 #include "../../aditya_singh/database/database.h"
 #include <string>
 
-const int MAX_STATIONS = 20;
+const int MAX_STATIONS = 50;
 const int MAX_SESSIONS = 200;
 const int MAX_REQUESTS = 200;
 
-// Simple Service to manage Charging Stations, Sessions and Requests
-// Uses simple C++ arrays (no vectors)
-// Created by: Mritunjay Thakur (Charging Stations Module Owner, ID: 2519425)
+// Charging Station & Charging Session Service
+// Separation of concerns: Handles business logic, state transitions, allocation, completion, SQLite transactions.
+// Uses simple C++ arrays (no vectors) adhering to 2nd-year DSA PBL conventions.
+// Created by: Mritunjay Thakur (Charging Stations Module Owner, Student ID: 2519425, Section ML-5)
 class StationService {
 private:
     Database* db;
@@ -52,13 +53,20 @@ public:
     void ensureSchemaMigrations();
 
     // ─── Charging Stations Management ──────────────────────────────────
+    // Create and persist a new station in SQLite and in-memory array (Phase 2 & Phase 3)
+    bool createStation(const ChargingStation& station, std::string& outError);
+
+    // Add new station to local array / wrapper
+    bool addStation(const ChargingStation& station);
+
     // Get all stations into outList array, returns count
     int getAllStations(ChargingStation outList[], int maxCapacity);
 
     // Get station by ID
     bool getStationById(const std::string& id, ChargingStation& outStation);
 
-    // Update station operational status ("available", "charging", "maintenance", "offline")
+    // Update station operational status with validated state transitions
+    bool updateStationStatus(const std::string& id, const std::string& newStatus, std::string& outError);
     bool updateStationStatus(const std::string& id, const std::string& newStatus, ChargingQueue* queue = nullptr);
 
     // Assign an EV to a station and mark it as "charging"
@@ -67,13 +75,10 @@ public:
     // Release station when charging completes, marks as "available"
     bool releaseStation(const std::string& stationId, ChargingQueue* queue = nullptr);
 
-    // Find the first available station matching criteria (returns true if found)
+    // Find the first available station matching criteria (returns true if found; skips maintenance & offline)
     bool findAvailableStation(ChargingStation& outStation,
                               const std::string& preferredStationId = "",
                               const std::string& requiredConnectorType = "CCS2");
-
-    // Add new station to local array
-    bool addStation(const ChargingStation& station);
 
     // ─── Customer Charging Request Management (Intake & Queue) ─────────
     // Retrieves customer charging requests. If userId > 0, strictly filters for that user.
@@ -129,14 +134,26 @@ public:
                                const std::string& stationId,
                                double targetCharge,
                                ChargingSession& outSession,
-                               int userId = 0,
-                               const std::string& requestId = "");
+                               int userId,
+                               const std::string& requestId,
+                               const std::string& bayId,
+                               std::string& outError);
 
-    // Computes live simulated session progress using Academic Constant-Power Model (Phase 8):
-    // ElapsedHours = elapsedSeconds / 3600.0
-    // EnergyStored = PowerKW * ElapsedHours * Efficiency (0.92)
-    // CurrentSoC = min(TargetSoC, StartingSoC + (EnergyStored / Capacity) * 100.0)
-    // Cost = calculateTariff(GridEnergy, "charging")
+    bool createChargingSession(const std::string& evId,
+                               const std::string& stationId,
+                               double targetCharge,
+                               ChargingSession& outSession,
+                               std::string& outError);
+
+    bool createChargingSession(const std::string& evId,
+                               const std::string& stationId,
+                               double targetCharge,
+                               ChargingSession& outSession,
+                               int userId = 0,
+                               const std::string& requestId = "",
+                               const std::string& bayId = "");
+
+    // Computes live simulated session progress using Academic Constant-Power Model (Phase 8)
     bool getSessionProgress(const std::string& sessionId,
                             ChargingSession& outSession,
                             double& currentSoC,
@@ -145,12 +162,19 @@ public:
                             int& elapsedSeconds);
 
     // Advances live charging progression on all active sessions based on constant-power physics.
-    // If a session reaches targetCharge, it automatically completes the session, updates EV SoC,
-    // records the transaction, frees the station bay, and triggers automatic FIFO queue dispatch.
-    // Returns number of sessions automatically completed during this tick.
     int advanceActiveSessions(ChargingQueue* queue = nullptr);
 
-    // Complete active charging session on station/session, record transaction, and automatically dispatch next waiting EV from queue
+    // Complete active charging session on station/session, calculate tariff, record transaction,
+    // and automatically dispatch next waiting EV from FIFO queue (atomic SQLite transaction)
+    bool completeChargingSession(const std::string& stationOrSessionId,
+                                 ChargingSession& outCompletedSession,
+                                 Transaction& outTxn,
+                                 ChargingQueue* queue,
+                                 ChargingSession* outDispatchedSession,
+                                 int callerUserId,
+                                 const std::string& callerRole,
+                                 std::string& outError);
+
     bool completeChargingSession(const std::string& stationOrSessionId,
                                  ChargingSession& outCompletedSession,
                                  Transaction& outTxn,
@@ -159,7 +183,15 @@ public:
                                  int callerUserId = 0,
                                  const std::string& callerRole = "admin");
 
+    bool completeChargingSession(const std::string& stationOrSessionId,
+                                 ChargingSession& outCompletedSession,
+                                 Transaction& outTxn,
+                                 ChargingQueue* queue,
+                                 ChargingSession* outDispatchedSession,
+                                 std::string& outError);
+
     // Safely enqueue an EV into the FIFO queue and synchronize SQLite status to 'waiting'
+    bool enqueueWaitingEV(const std::string& evId, ChargingQueue& queue, std::string& outError);
     bool enqueueWaitingEV(const std::string& evId, ChargingQueue& queue);
 
     // Deterministically rehydrate the FIFO ChargingQueue from SQLite based on status='waiting' ordered by last_activity ASC, registered_at ASC, rowid ASC

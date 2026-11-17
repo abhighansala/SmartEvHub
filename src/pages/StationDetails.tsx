@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import Box from '@mui/material/Box';
 import Card from '@mui/material/Card';
@@ -6,7 +6,19 @@ import Grid from '@mui/material/Grid2';
 import Typography from '@mui/material/Typography';
 import Button from '@mui/material/Button';
 import LinearProgress from '@mui/material/LinearProgress';
-import Chip from '@mui/material/Chip';
+import Dialog from '@mui/material/Dialog';
+import DialogTitle from '@mui/material/DialogTitle';
+import DialogContent from '@mui/material/DialogContent';
+import DialogActions from '@mui/material/DialogActions';
+import TextField from '@mui/material/TextField';
+import MenuItem from '@mui/material/MenuItem';
+import Alert from '@mui/material/Alert';
+import Table from '@mui/material/Table';
+import TableBody from '@mui/material/TableBody';
+import TableCell from '@mui/material/TableCell';
+import TableContainer from '@mui/material/TableContainer';
+import TableHead from '@mui/material/TableHead';
+import TableRow from '@mui/material/TableRow';
 import { useTheme, alpha } from '@mui/material/styles';
 
 import ArrowBackOutlined from '@mui/icons-material/ArrowBackOutlined';
@@ -14,17 +26,28 @@ import StopCircleOutlined from '@mui/icons-material/StopCircleOutlined';
 import ElectricBoltOutlined from '@mui/icons-material/ElectricBoltOutlined';
 import BuildOutlined from '@mui/icons-material/BuildOutlined';
 import PowerOffOutlined from '@mui/icons-material/PowerOffOutlined';
+import HistoryOutlined from '@mui/icons-material/HistoryOutlined';
 
 import PageHeader from '@/components/common/PageHeader';
 import StatusChip from '@/components/common/StatusChip';
 import EmptyState from '@/components/common/EmptyState';
 import { useApp } from '@/context/AppContext';
+import { api } from '@/services/api';
+import type { StationStatus } from '@/types';
 
 export default function StationDetails() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const theme = useTheme();
-  const { stations, sessions, completeSession, refreshBackendData } = useApp();
+  const { stations, sessions, currentUser, completeSession, refreshBackendData, showSnackbar } = useApp();
+
+  const isOperatorOrAdmin = currentUser?.role === 'operator' || currentUser?.role === 'admin';
+
+  const [confirmStopOpen, setConfirmStopOpen] = useState(false);
+  const [statusDialogOpen, setStatusDialogOpen] = useState(false);
+  const [targetStatus, setTargetStatus] = useState<StationStatus>('available');
+  const [statusLoading, setStatusLoading] = useState(false);
+  const [statusError, setStatusError] = useState('');
 
   const station = stations.find(s => s.id === id);
   if (!station) {
@@ -65,15 +88,58 @@ export default function StationDetails() {
     ? (session.currentCharge ?? (session.batteryEnd ?? session.batteryStart))
     : 50;
 
+  // Past sessions for this specific charging bay
+  const stationSessions = sessions.filter(s => s.stationId === station.id);
+
+  const handleUpdateStatus = async () => {
+    setStatusLoading(true);
+    setStatusError('');
+
+    try {
+      const res: any = await api.updateStationStatus(station.id, targetStatus);
+      setStatusLoading(false);
+      if (res && res.success) {
+        setStatusDialogOpen(false);
+        showSnackbar(`Station status updated to ${targetStatus}`, 'success');
+        await refreshBackendData();
+      } else {
+        setStatusError(res?.message || 'Failed to update status');
+      }
+    } catch (err: any) {
+      setStatusLoading(false);
+      setStatusError(err.message || 'Error updating status');
+    }
+  };
+
+  const handleConfirmStop = async () => {
+    setConfirmStopOpen(false);
+    await completeSession(session ? session.id : station.id);
+  };
+
   return (
     <Box>
       <PageHeader
         title={`${station.name}`}
         subtitle={`${station.id} • ${station.location}`}
         action={
-          <Button startIcon={<ArrowBackOutlined />} onClick={() => navigate('/stations')}>
-            Back
-          </Button>
+          <Box sx={{ display: 'flex', gap: 1.5 }}>
+            {isOperatorOrAdmin && (
+              <Button
+                variant="outlined"
+                startIcon={<BuildOutlined />}
+                onClick={() => {
+                  setTargetStatus(station.status);
+                  setStatusError('');
+                  setStatusDialogOpen(true);
+                }}
+              >
+                Manage Status
+              </Button>
+            )}
+            <Button startIcon={<ArrowBackOutlined />} onClick={() => navigate('/stations')}>
+              Back
+            </Button>
+          </Box>
         }
       />
 
@@ -100,7 +166,7 @@ export default function StationDetails() {
               </Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
                 <Typography variant="body2" color="text.secondary">Current EV</Typography>
-                <Typography variant="body2" fontWeight={500}>{station.currentEV || 'None'}</Typography>
+                <Typography variant="body2" fontWeight={500}>{station.currentEV || (session ? session.evId : 'None')}</Typography>
               </Box>
             </Box>
           </Card>
@@ -170,7 +236,7 @@ export default function StationDetails() {
                   variant="contained"
                   color="error"
                   startIcon={<StopCircleOutlined />}
-                  onClick={() => completeSession(session ? session.id : station.id)}
+                  onClick={() => setConfirmStopOpen(true)}
                 >
                   Stop Session
                 </Button>
@@ -234,11 +300,126 @@ export default function StationDetails() {
                 <Typography variant="body2" color="text.secondary">
                   Ready to accept a charging session.
                 </Typography>
+                <Button
+                  variant="contained"
+                  startIcon={<ElectricBoltOutlined />}
+                  onClick={() => navigate('/stations')}
+                  sx={{ mt: 1 }}
+                >
+                  Request Charging Here
+                </Button>
               </Box>
             )}
           </Card>
         </Grid>
+
+        {/* Station Session History Table */}
+        <Grid size={{ xs: 12 }}>
+          <Card sx={{ p: 3, border: `1px solid ${theme.palette.divider}`, mt: 1 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+              <HistoryOutlined sx={{ color: theme.palette.primary.main }} />
+              <Typography variant="h5">Recent Charging Sessions at this Bay</Typography>
+            </Box>
+
+            {stationSessions.length === 0 ? (
+              <Typography variant="body2" color="text.secondary" sx={{ py: 2, textAlign: 'center' }}>
+                No recorded charging sessions at {station.name} yet.
+              </Typography>
+            ) : (
+              <TableContainer>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Session ID</TableCell>
+                      <TableCell>Vehicle</TableCell>
+                      <TableCell>SoC Progress</TableCell>
+                      <TableCell>Energy</TableCell>
+                      <TableCell>Cost</TableCell>
+                      <TableCell>Duration</TableCell>
+                      <TableCell>Status</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {stationSessions.map((s) => (
+                      <TableRow key={s.id} hover>
+                        <TableCell sx={{ fontWeight: 600 }}>{s.id}</TableCell>
+                        <TableCell>{s.evId}</TableCell>
+                        <TableCell>
+                          {s.batteryStart}% → {s.batteryEnd ?? s.targetCharge}%
+                        </TableCell>
+                        <TableCell>{(s.energyConsumed || 0).toFixed(1)} kWh</TableCell>
+                        <TableCell>₹{(s.estimatedCost || 0).toFixed(0)}</TableCell>
+                        <TableCell>{s.duration ? `${s.duration}m` : '15m'}</TableCell>
+                        <TableCell>
+                          <StatusChip status={s.status} />
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
+          </Card>
+        </Grid>
       </Grid>
+
+      {/* Confirmation Dialog for Stopping Session */}
+      <Dialog open={confirmStopOpen} onClose={() => setConfirmStopOpen(false)}>
+        <DialogTitle sx={{ fontWeight: 700 }}>Complete Charging Session?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2">
+            Are you sure you want to stop and complete this active charging session? Billing tariff and transaction receipt will be finalized.
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setConfirmStopOpen(false)}>Cancel</Button>
+          <Button variant="contained" color="error" onClick={handleConfirmStop}>
+            Stop & Complete
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Manage Status Dialog */}
+      <Dialog open={statusDialogOpen} onClose={() => !statusLoading && setStatusDialogOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 700 }}>Update Station Status</DialogTitle>
+        <DialogContent sx={{ pt: 2, display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {statusError && <Alert severity="error">{statusError}</Alert>}
+
+          <Typography variant="body2" color="text.secondary">
+            Change operational status for <strong>{station.name}</strong> ({station.id}).
+          </Typography>
+
+          <TextField
+            select
+            label="Operational Status"
+            value={targetStatus}
+            onChange={e => setTargetStatus(e.target.value as StationStatus)}
+            fullWidth
+          >
+            <MenuItem value="available">Available (Online & accepting EVs)</MenuItem>
+            <MenuItem value="maintenance">Maintenance (Under repair / servicing)</MenuItem>
+            <MenuItem value="offline">Offline (Decommissioned / network cut)</MenuItem>
+          </TextField>
+
+          <Alert severity="info" sx={{ fontSize: '0.8rem' }}>
+            Note: Active charging stations cannot be manually set to available until the charging session is completed.
+          </Alert>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2.5 }}>
+          <Button onClick={() => setStatusDialogOpen(false)} disabled={statusLoading}>
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            color="primary"
+            onClick={handleUpdateStatus}
+            disabled={statusLoading}
+          >
+            {statusLoading ? 'Updating...' : 'Update Status'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       <style>{`
         @keyframes pulse {
           0%, 100% { opacity: 1; }

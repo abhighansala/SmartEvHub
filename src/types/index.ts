@@ -82,6 +82,7 @@ export interface ChargingSession {
   simulatedRemainingMinutes?: number;
   demoRemainingMinutes?: number;
   speedMultiplier?: number;
+  duration?: number;
 }
 
 // ─── Transaction Types ───────────────────────────────────────────────────────
