@@ -5,6 +5,7 @@ void registerStationRoutes(crow::App<crow::CORSHandler>& app, StationService& st
     // GET /api/stations - List all stations
     CROW_ROUTE(app, "/api/stations").methods(crow::HTTPMethod::GET)
     ([&stationService](){
+        stationService.advanceActiveSessions();
         ChargingStation list[MAX_STATIONS];
         int count = stationService.getAllStations(list, MAX_STATIONS);
 

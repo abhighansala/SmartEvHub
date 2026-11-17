@@ -40,6 +40,7 @@ interface AppContextType {
   sessions: ChargingSession[];
   transactions: Transaction[];
   chargingQueue: ChargingRequest[];
+  chargingRequests: ChargingRequest[];
   swapQueue: SwapRequest[];
   notifications: Notification[];
   settings: AppSettings;
@@ -67,7 +68,9 @@ interface AppContextType {
   // Queue operations
   processNextCharging: () => Promise<ChargingRequest | null>;
   removeChargingRequest: (id: string) => void;
-  addChargingRequest: (req: Omit<ChargingRequest, 'id' | 'requestedAt'>) => Promise<void>;
+  addChargingRequest: (req: Omit<ChargingRequest, 'id' | 'requestedAt'> & { stationId?: string }) => Promise<void>;
+  cancelChargingRequest: (id: string) => Promise<boolean>;
+  allocateBayManually: (requestId: string, stationId: string) => Promise<boolean>;
   processNextSwap: () => Promise<SwapRequest | null>;
   removeSwapRequest: (id: string) => void;
   addSwapRequest: (req: Omit<SwapRequest, 'id' | 'requestedAt'>) => Promise<void>;
@@ -108,6 +111,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [sessions, setSessions] = useState<ChargingSession[]>(mockSessions);
   const [transactions, setTransactions] = useState<Transaction[]>(mockTransactions);
   const [chargingQueue, setChargingQueue] = useState<ChargingRequest[]>(mockChargingQueue);
+  const [chargingRequests, setChargingRequests] = useState<ChargingRequest[]>([]);
   const [swapQueue, setSwapQueue] = useState<SwapRequest[]>(mockSwapQueue);
   const [notifications, setNotifications] = useState<Notification[]>(mockNotifications);
   const [settings, setSettings] = useState<AppSettings>({
@@ -150,16 +154,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
     const stored = localStorage.getItem('currentUser');
-    return stored ? JSON.parse(stored) : null;
+    const token = localStorage.getItem('authToken');
+    return (stored && token) ? JSON.parse(stored) : null;
   });
   const isAuthenticated = !!currentUser;
 
   const login = useCallback((user: User, token?: string) => {
-    setCurrentUser(user);
-    localStorage.setItem('currentUser', JSON.stringify(user));
     if (token) {
       localStorage.setItem('authToken', token);
     }
+    localStorage.setItem('currentUser', JSON.stringify(user));
+    setCurrentUser(user);
     showSnackbar(`Welcome back, ${user.name}!`, 'success');
   }, [showSnackbar]);
 
@@ -171,23 +176,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch (e) {
       // Ignore network errors on logout
     }
-    setCurrentUser(null);
     localStorage.removeItem('currentUser');
     localStorage.removeItem('authToken');
+    setCurrentUser(null);
+    setEVs([]);
+    setChargingRequests([]);
     showSnackbar('Logged out successfully', 'info');
   }, [isBackendOnline, showSnackbar]);
 
   // Handle Token Expiration events from API Client
   useEffect(() => {
     const handleExpired = () => {
-      setCurrentUser(null);
+      const hadUser = !!localStorage.getItem('currentUser') || !!currentUser;
       localStorage.removeItem('currentUser');
       localStorage.removeItem('authToken');
-      showSnackbar('Your session has expired. Please sign in again.', 'warning');
+      setCurrentUser(null);
+      setEVs([]);
+      setChargingRequests([]);
+      if (hadUser) {
+        showSnackbar('Your session has expired. Please sign in again.', 'warning');
+      }
     };
     window.addEventListener('evhub-auth-expired', handleExpired);
     return () => window.removeEventListener('evhub-auth-expired', handleExpired);
-  }, [showSnackbar]);
+  }, [currentUser, showSnackbar]);
 
   // Validate stored JWT on initial boot
   useEffect(() => {
@@ -205,9 +217,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
           localStorage.removeItem('authToken');
           localStorage.removeItem('currentUser');
           setCurrentUser(null);
+          setEVs([]);
+          setChargingRequests([]);
         });
     }
   }, []);
+
+  const evsRef = React.useRef(evs);
+  useEffect(() => {
+    evsRef.current = evs;
+  }, [evs]);
 
   // Synchronize with C++ Crow Backend
   const refreshBackendData = useCallback(async () => {
@@ -215,17 +234,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
       await api.checkHealth();
       setIsBackendOnline(true);
 
+      const token = localStorage.getItem('authToken');
+
       // Fetch live DSA Queues, Stack, entities, sessions & transactions in parallel
-      const [cQueue, sQueue, tStack, backendEVs, backendStations, backendBatteries, backendTxns, backendSessions] = await Promise.all([
+      const [cQueue, sQueue, tStack, backendEVs, backendStations, backendBatteries, backendTxns, backendSessions, backendRequests] = await Promise.all([
         api.getChargingQueue().catch(() => null),
         api.getSwapQueue().catch(() => null),
         api.getTransactionStack().catch(() => null),
-        api.getEVs().catch(() => null),
+        token ? api.getEVs().catch(() => null) : Promise.resolve(null),
         api.getStations().catch(() => null),
         api.getBatteries().catch(() => null),
         api.getTransactions().catch(() => null),
         api.getSessions().catch(() => null),
+        token ? api.getChargingRequests().catch(() => null) : Promise.resolve(null),
       ]);
+
+      if (!token) {
+        setEVs([]);
+        setChargingRequests([]);
+      }
 
       if (cQueue) {
         setChargingQueueMeta({
@@ -254,7 +281,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
 
       // Update SQLite entity states
-      let effectiveEVs = evs;
+      let effectiveEVs = evsRef.current;
       if (backendEVs && Array.isArray(backendEVs)) {
         setEVs(backendEVs);
         effectiveEVs = backendEVs;
@@ -270,6 +297,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       if (backendSessions && Array.isArray(backendSessions)) {
         setSessions(backendSessions);
+      }
+      if (backendRequests && Array.isArray(backendRequests)) {
+        const mappedReqs: ChargingRequest[] = backendRequests.map((r: any) => {
+          const vId = r.vehicleId || r.evId || '';
+          const ev = effectiveEVs.find((e: any) => e.id === vId);
+          return {
+            id: r.id,
+            evId: vId,
+            vehicleId: vId,
+            evModel: ev?.model || 'Electric Vehicle',
+            owner: ev?.owner || 'Customer',
+            currentCharge: ev?.currentCharge ?? 20,
+            requestedAt: r.createdAt || new Date().toISOString(),
+            createdAt: r.createdAt,
+            priority: 'normal',
+            userId: r.userId,
+            stationId: r.stationId,
+            bayId: r.bayId,
+            targetCharge: r.targetCharge || 85,
+            connectorType: r.connectorType || 'CCS2',
+            status: r.status || 'queued',
+            queuePosition: r.queuePosition,
+          };
+        });
+        setChargingRequests(mappedReqs);
       }
 
       // Hydrate visual queues from C++ array buffers
@@ -307,11 +359,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       setIsBackendOnline(false);
     }
-  }, [evs]);
+  }, []);
 
   useEffect(() => {
     refreshBackendData();
-  }, [refreshBackendData]);
+  }, [refreshBackendData, currentUser]);
 
   // ─── Live Charging Simulation Engine ─────────────────────
   useEffect(() => {
@@ -566,15 +618,60 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return first;
   }, [chargingQueue, stations, isBackendOnline, refreshBackendData, showSnackbar]);
 
-  const removeChargingRequest = useCallback((id: string) => {
+  const removeChargingRequest = useCallback(async (id: string) => {
+    if (isBackendOnline) {
+      try {
+        await api.cancelChargingRequest(id);
+        await refreshBackendData();
+        showSnackbar('Request removed from queue');
+        return;
+      } catch (e: any) {
+        showSnackbar(e.message || 'Failed to remove request', 'error');
+        return;
+      }
+    }
     setChargingQueue(prev => prev.filter(r => r.id !== id));
     showSnackbar('Request removed from queue');
-  }, [showSnackbar]);
+  }, [isBackendOnline, refreshBackendData, showSnackbar]);
+
+  const cancelChargingRequest = useCallback(async (requestId: string): Promise<boolean> => {
+    if (isBackendOnline) {
+      try {
+        await api.cancelChargingRequest(requestId);
+        await refreshBackendData();
+        showSnackbar('Charging request cancelled', 'info');
+        return true;
+      } catch (e: any) {
+        showSnackbar(e.message || 'Failed to cancel charging request', 'error');
+        return false;
+      }
+    }
+    setChargingRequests(prev => prev.map(r => r.id === requestId ? { ...r, status: 'cancelled' } : r));
+    setChargingQueue(prev => prev.filter(r => r.id !== requestId));
+    showSnackbar('Charging request cancelled', 'info');
+    return true;
+  }, [isBackendOnline, refreshBackendData, showSnackbar]);
+
+  const allocateBayManually = useCallback(async (requestId: string, stationId: string): Promise<boolean> => {
+    if (isBackendOnline) {
+      try {
+        const res: any = await api.allocateBayManually(requestId, stationId);
+        await refreshBackendData();
+        showSnackbar(res?.message || 'Bay allocated successfully', 'success');
+        return true;
+      } catch (e: any) {
+        showSnackbar(e.message || 'Failed to allocate bay', 'error');
+        return false;
+      }
+    }
+    return false;
+  }, [isBackendOnline, refreshBackendData, showSnackbar]);
+
 
   const addChargingRequest = useCallback(async (req: Omit<ChargingRequest, 'id' | 'requestedAt'>) => {
     if (isBackendOnline) {
       try {
-        const res = await api.requestCharging(req.evId, 85.0);
+        const res: any = await api.requestCharging({ evId: req.evId, stationId: (req as any).stationId, targetCharge: req.targetCharge || 85.0 });
         if (res && res.success) {
           if (res.assigned && res.stationId) {
             showSnackbar(`Vehicle ${req.evId} assigned to Station ${res.stationId}`, 'success');
@@ -822,6 +919,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       addStation, updateStation,
       addBattery, updateBattery,
       processNextCharging, removeChargingRequest, addChargingRequest,
+      chargingRequests, cancelChargingRequest, allocateBayManually,
       processNextSwap, removeSwapRequest, addSwapRequest,
       completeSession,
       markNotificationRead, markAllNotificationsRead, addNotification,

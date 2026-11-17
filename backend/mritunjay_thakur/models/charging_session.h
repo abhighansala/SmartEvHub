@@ -21,6 +21,9 @@ private:
     int duration;              // Charging duration in minutes
     double estimatedCost;      // Total billed cost in INR
     std::string status;        // "active", "completed"
+    int userId;                // ID of owner user
+    std::string requestId;     // Optional associated ChargingRequest ID
+    std::string bayId;         // Bay / Location string
 
 public:
     ChargingSession() {
@@ -37,13 +40,17 @@ public:
         duration = 0;
         estimatedCost = 0.0;
         status = "active";
+        userId = 0;
+        requestId = "";
+        bayId = "";
     }
 
     ChargingSession(std::string sesId, std::string vId, std::string model,
                     std::string sId, double bStart, double target = 85.0,
                     std::string sTime = "", std::string eTime = "",
                     double bEnd = 0.0, double energy = 0.0, double cost = 0.0,
-                    std::string stat = "active", int dur = 0) {
+                    std::string stat = "active", int uId = 0,
+                    std::string reqId = "", std::string bId = "", int dur = 0) {
         id = sesId;
         vehicleId = vId;
         evModel = model.empty() ? "Electric Vehicle" : model;
@@ -56,6 +63,9 @@ public:
         energyConsumed = (energy >= 0.0) ? energy : 0.0;
         estimatedCost = (cost >= 0.0) ? cost : 0.0;
         status = (stat == "completed") ? "completed" : "active";
+        userId = uId;
+        requestId = reqId;
+        bayId = bId;
         duration = (dur >= 0) ? dur : 0;
     }
 
@@ -73,6 +83,9 @@ public:
     int getDuration() const { return duration; }
     double getEstimatedCost() const { return estimatedCost; }
     std::string getStatus() const { return status; }
+    int getUserId() const { return userId; }
+    std::string getRequestId() const { return requestId; }
+    std::string getBayId() const { return bayId; }
 
     // Setters
     void setId(const std::string& newId) { id = newId; }
@@ -88,6 +101,9 @@ public:
     void setDuration(int dur) { duration = (dur >= 0) ? dur : 0; }
     void setEstimatedCost(double cost) { estimatedCost = (cost >= 0.0) ? cost : 0.0; }
     void setStatus(const std::string& newStatus) { status = newStatus; }
+    void setUserId(int uId) { userId = uId; }
+    void setRequestId(const std::string& reqId) { requestId = reqId; }
+    void setBayId(const std::string& bId) { bayId = bId; }
 
     bool isActive() const { return status == "active"; }
     bool isCompleted() const { return status == "completed"; }

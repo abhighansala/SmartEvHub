@@ -7,12 +7,17 @@
 #include "../dsa/swap_queue.h"
 #include "../dsa/transaction_stack.h"
 
+class StationService;
+class Database;
+
 // Registers Data Structures & Algorithms REST API routes
 // Exposes the manual Queue and Stack state to the React frontend
 // Created by: Abhishek Ghansala (UI + DSA + Final Integration, ID: 2518132)
 void registerDSARoutes(crow::App<crow::CORSHandler>& app,
                        ChargingQueue& chargingQueue,
                        SwapQueue& swapQueue,
-                       TransactionStack& txnStack);
+                       TransactionStack& txnStack,
+                       StationService* stationService = nullptr,
+                       Database* db = nullptr);
 
 #endif

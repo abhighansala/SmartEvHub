@@ -58,8 +58,8 @@ The project follows a clean separation of concerns, giving each team member an i
 
 ## 3. Key Features
 
-- **Hardened Authentication & Security (Aditya)**: Bcrypt password hashing (10 rounds), RFC 7519 JWT tokens with HMAC-SHA256 signatures, authentication middleware (`requireAuth`), role-based authorization (`admin`, `operator`, `user`), and transparent on-boot bcrypt migration for legacy seed users.
-- **Real-Time Station Monitoring & Control**: View live status, power rating, and current vehicle for all charging stations (`CS-1` through `CS-6`).
+- **Hardened Authentication & Security (Aditya)**: Bcrypt password hashing (10 rounds), RFC 7519 JWT tokens with HMAC-SHA256 signatures, authentication middleware (`requireAuth`), role-based authorization (`admin`, `operator`, `user`), constant-time signature verification, and transparent on-boot bcrypt migration for legacy seed users.
+- **Real-Time Station Monitoring & Control**: View live status, power rating, and current vehicle for all charging stations (`CS-1` through `CS-4`).
 - **Live Charging Simulation**: Progressive SoC (% charge) updates calculated dynamically from charger wattage and battery capacity, advancing vehicle state from charging to completed.
 - **Smart FIFO Charging Queue**: When all charging bays are occupied, incoming charging requests automatically enter Abhishek's manual FIFO `ChargingQueue`. Once a bay opens, queued vehicles are dispatched first-come, first-served.
 - **Battery Swapping Bay**: Amit's battery inventory manager verifies healthy replacement batteries ($\ge 90\%$ SoC) and performs rapid battery swaps in under 5 minutes.
@@ -70,96 +70,159 @@ The project follows a clean separation of concerns, giving each team member an i
 
 ---
 
-## 4. Prerequisites
+## 4. System Prerequisites
 
-- **C++ Compiler**: GCC/MinGW-w64 (v11+) or MSVC (Visual Studio 2022) with C++20 support.
-- **CMake**: Version 3.16 or higher.
-- **Node.js**: Version 18.x or 20.x or higher, and `npm`.
-- **Git**: For version control.
+The application can be built and run on Windows 10/11, Linux, or macOS. For Windows developers, the following prerequisites are required:
 
-*(Note: Crow and Asio dependencies are automatically fetched via CMake `FetchContent` — no manual library installation is required).*
+| Component | Minimum Version | Verified Version | Installation Notes |
+| :--- | :--- | :--- | :--- |
+| **Node.js** | `v18.x` | `v24.11.1` | Includes `npm` (`v11.6.2`). Download from [nodejs.org](https://nodejs.org/). |
+| **CMake** | `v3.20` | `v4.4.3` | Download from [cmake.org](https://cmake.org/). Ensure `cmake` is added to Windows `PATH`. |
+| **C++20 Compiler** | GCC 11+ or MSVC 2022 | MinGW-w64 GCC 16.1.0 | Must support C++20 standard (`-std=c++20`). E.g., [WinLibs MinGW-w64](https://winlibs.com/) or Visual Studio C++ build tools. |
+| **SQLite3** | Bundled in-tree | Amalgamation 3.x | **No installation required**. SQLite is bundled directly in the source tree at `backend/src/sqlite3.c`. |
+| **Crow & Asio** | Bundled / CMake | Crow v1.2.0, Asio 1-28-0 | **No installation required**. Automatically downloaded at build time via CMake `FetchContent`. |
 
 ---
 
-## 5. How to Build & Run Locally
+## 5. Fresh Installation Guide (Step-by-Step)
 
-### A. Backend Setup & Run
+Follow these steps when starting from a newly extracted GitHub ZIP download or a fresh `git clone`:
 
-1. Open PowerShell or a terminal and navigate to the `backend` directory:
-   ```powershell
-   cd backend
-   ```
-2. Generate build files with CMake:
-   ```powershell
-   cmake -B build -S .
-   ```
-3. Compile the unified server and all member test suites:
-   ```powershell
-   cmake --build build
-   ```
-4. Run the backend server:
-   ```powershell
-   cd build
-   .\smart_ev_hub_backend.exe
-   ```
-   The backend will start and listen on **`http://localhost:8080`**.
-   Verify backend health:
-   ```powershell
-   curl http://localhost:8080/api/health
-   ```
-
-### B. Running Member Unit Tests
-
-From the `backend/build` folder, you can run individual or all unit tests:
-
+### Step 1: Open Terminal in Project Directory
+Open PowerShell or Windows Terminal and navigate to the project root:
 ```powershell
-# Lead: Database & Auth Foundation
-.\test_aditya_singh.exe
-
-# Lead: Cryptography, Bcrypt, JWT & RBAC Security Suite
-.\test_security_auth.exe
-
-# Member 2: EV Management
-.\test_priyanshu_dutt.exe
-
-# Member 3: Stations & Charging
-.\test_mritunjay_thakur.exe
-
-# Member 4: Batteries & Swapping
-.\test_amit_singh_kaintura.exe
-
-# Member 5: DSA (FIFO Queues & LIFO Stack)
-.\test_abhishek_ghansala.exe
-
-# Member 6: Transactions & Reports
-.\test_agreev_singh.exe
+cd C:\path\to\SmartEvHub
 ```
 
-### C. Frontend Setup & Run
+### Step 2: Install Frontend Dependencies
+```powershell
+npm install
+```
+This installs React 19, Material-UI, Lucide icons, Vite, TypeScript, and developer tooling into `node_modules/`.
 
-1. In the project root (`c:\SmartEvHub-Abhishek-Local`), install dependencies:
-   ```powershell
-   npm install
-   ```
-2. Verify production build & TypeScript validation:
-   ```powershell
-   npm run build
-   ```
-3. Start the development server:
-   ```powershell
-   npm run dev
-   ```
-   Open **`http://localhost:3000`** in your browser.
+### Step 3: Configure Environment Variables
+Copy the provided `.env.example` template:
+```powershell
+Copy-Item .env.example .env
+# Or in cmd: copy .env.example .env
+```
+Ensure your `.env` contains:
+```env
+# Mandatory >= 32 characters for HMAC-SHA256 token security
+JWT_SECRET=SmartEvHub_LocalDev_SecretKey_Minimum_32_Characters_2026_Secure!
+PORT=8080
+VITE_API_URL=http://localhost:8080/api
+```
+
+*(Note: The startup scripts automatically supply a safe default development secret if `.env` is omitted, but creating `.env` is best practice).*
 
 ---
 
-## 6. REST API Reference
+## 6. How to Build & Run Locally
+
+### Option A: Simultaneous One-Command Startup (Recommended)
+
+From the project root, simply run:
+```powershell
+npm run dev:full
+```
+**What this does automatically:**
+1. Validates that the C++ backend executable exists in `backend/build/`.
+2. If absent, automatically invokes CMake to configure and compile `smart_ev_hub_backend.exe`.
+3. Auto-creates the SQLite database (`backend/evhub.db`) and initializes all tables and seed data if not present.
+4. Starts the Crow C++ backend on **`http://localhost:8080`**.
+5. Starts the Vite React frontend on **`http://localhost:3000`**.
+6. Streams color-coded output from both processes to a single terminal window.
+7. Gracefully terminates both processes on `Ctrl+C`.
+
+### Option B: Independent Service Startup (Two Terminals)
+
+**Terminal 1 — C++ Backend:**
+```powershell
+# Automated launcher (loads .env and handles compilation guard):
+npm run dev:backend
+
+# Or manual CMake compilation:
+# On Windows (MinGW-w64):
+cmake -B backend/build -S backend -G "MinGW Makefiles"
+cmake --build backend/build
+backend\build\smart_ev_hub_backend.exe
+```
+Backend runs on: **`http://localhost:8080`** (Health check: `http://localhost:8080/api/health`)
+
+**Terminal 2 — Frontend:**
+```powershell
+npm run dev
+```
+Frontend runs on: **`http://localhost:3000`**
+
+---
+
+## 7. Testing & Quality Assurance
+
+### A. All 7 C++ Backend Test Suites
+
+Run all 7 C++ member test suites from the project root:
+```powershell
+node -e "
+const { execFileSync } = require('child_process');
+const path = require('path');
+const tests = [
+  'test_security_auth.exe',
+  'test_aditya_singh.exe',
+  'test_priyanshu_dutt.exe',
+  'test_mritunjay_thakur.exe',
+  'test_amit_singh_kaintura.exe',
+  'test_abhishek_ghansala.exe',
+  'test_agreev_singh.exe'
+];
+tests.forEach(t => {
+  console.log('Testing ' + t + '...');
+  execFileSync(path.resolve('backend/build', t), { stdio: 'inherit' });
+});
+console.log('All 7 C++ test suites passed!');
+"
+```
+
+Individual test executables can also be run directly:
+- `backend/build/test_security_auth.exe` — Cryptographic primitives, Bcrypt, JWT HS256, Constant-Time Comparison, Privilege Escalation Guard
+- `backend/build/test_aditya_singh.exe` — SQLite database initialization, transactions, user authentication
+- `backend/build/test_priyanshu_dutt.exe` — EV fleet CRUD, database persistence, and rollback verification
+- `backend/build/test_mritunjay_thakur.exe` — Charging station allocation, status state machine, and session management
+- `backend/build/test_amit_singh_kaintura.exe` — Battery inventory management, SoC/SoH checks, and rapid swap execution
+- `backend/build/test_abhishek_ghansala.exe` — Custom FIFO ChargingQueue, SwapQueue, and LIFO TransactionStack DSA structures
+- `backend/build/test_agreev_singh.exe` — Tariff billing calculation, transaction logging, and operational analytics
+
+### B. End-to-End System Verification (All 6 Scenarios)
+
+With the backend running, execute the automated end-to-end integration test:
+```powershell
+node scripts/test-e2e-scenarios.js
+```
+This tests and validates:
+1. **Scenario 1**: Authentication, bcrypt hashing, JWT issuance & verification, privilege escalation guard, `/api/me`.
+2. **Scenario 2**: EV registration, retrieval, update, delete, and SQLite persistence.
+3. **Scenario 3**: Charging bay allocation, FIFO queue enqueueing, session completion, auto-dispatch, and billing.
+4. **Scenario 4**: Battery inventory querying, rapid swap processing, and swap queue fallback.
+5. **Scenario 5**: Transaction recording, LIFO stack operations, tariff formulas, and KPI analytics.
+6. **Scenario 6**: Database cold-restart persistence verification across process termination.
+
+### C. Frontend Production Build & TypeScript Verification
+
+```powershell
+npm run build
+```
+Runs `tsc --noEmit` and `vite build` to guarantee zero type errors and valid production bundles in `dist/`.
+
+---
+
+## 8. REST API Reference
 
 | Method | Endpoint | Description | Subsystem / Owner |
 | :--- | :--- | :--- | :--- |
 | `GET` | `/api/health` | System health and database connectivity check | Core |
-| `POST` | `/api/register` | Register new user with bcrypt hash | Aditya Singh |
-| `POST` | `/api/login` | User authentication returning JWT token | Aditya Singh |
+| `POST` | `/api/register` | Register new user with bcrypt hash & JWT issue | Aditya Singh |
+| `POST` | `/api/login` | User authentication with bcrypt returning JWT | Aditya Singh |
 | `GET` | `/api/me` | Authenticated user profile (requires Bearer token) | Aditya Singh |
 | `GET` | `/api/users` | List users (requires admin or operator token) | Aditya Singh |
 | `POST` | `/api/logout` | End user session | Aditya Singh |
@@ -178,6 +241,7 @@ From the `backend/build` folder, you can run individual or all unit tests:
 | `POST` | `/api/swap/request` | Submit battery swap request | Amit Singh Kaintura |
 | `POST` | `/api/swap/process` | Process next battery swap from queue | Amit Singh Kaintura |
 | `GET` | `/api/charging/queue` | Query live FIFO charging queue state | Abhishek Ghansala |
+| `POST` | `/api/charging/queue` | Manually enqueue vehicle to FIFO charging queue | Abhishek Ghansala |
 | `GET` | `/api/swap/queue` | Query live FIFO swap queue state | Abhishek Ghansala |
 | `GET` | `/api/transactions/stack` | Query live LIFO transaction stack state | Abhishek Ghansala |
 | `GET` | `/api/transactions` | Query full transaction log | Agreev Singh |
@@ -187,22 +251,68 @@ From the `backend/build` folder, you can run individual or all unit tests:
 
 ---
 
-## 7. Data Structures & Viva Reference
+## 9. Data Structures & Viva Reference
 
 As required for 2nd-year Data Structures & Algorithms (PBL):
 
-1. **`ChargingQueue` & `SwapQueue` (FIFO — First In, First Out)**:
-   - **Underlying Structure**: Fixed circular/linear array buffer of size 50.
-   - **Operations**: `enqueue(req)` ($O(1)$), `dequeue()` ($O(1)$), `peek()` ($O(1)$), `isFull()`, `isEmpty()`.
-   - **Viva Explanation**: Ensures fair vehicle servicing without starvation. When all 6 charging stations are busy, incoming cars wait in the queue and are assigned to the first station that becomes available.
+### 1. `ChargingQueue` & `SwapQueue` (FIFO — First In, First Out)
+- **Underlying Structure**: Fixed circular/linear array buffer of size 50.
+- **Operations**: `enqueue(req)` ($O(1)$), `dequeue()` ($O(1)$), `peek()` ($O(1)$), `isFull()`, `isEmpty()`.
+- **Viva Explanation**: Guarantees fair vehicle servicing without starvation. When all charging stations are busy, incoming cars wait in the queue and are assigned to the first station that becomes available in exact arrival sequence.
+- **Persistence Rehydration**: On backend boot, waiting vehicles in SQLite (`status = 'waiting'`) are rehydrated into the in-memory FIFO queue preserving order of `last_activity`.
 
-2. **`TransactionStack` (LIFO — Last In, First Out)**:
-   - **Underlying Structure**: Fixed array buffer with a top index pointer.
-   - **Operations**: `push(txn)` ($O(1)$), `pop()` ($O(1)$), `peek()` ($O(1)$).
-   - **Viva Explanation**: Used for auditing the most recent payment transactions, enabling instant audit inspection and $O(1)$ rollback/undo functionality for the latest station operations.
+### 2. `TransactionStack` (LIFO — Last In, First Out)
+- **Underlying Structure**: Fixed array buffer with a top index pointer (capacity 50).
+- **Operations**: `push(txn)` ($O(1)$), `pop()` ($O(1)$), `peek()` ($O(1)$).
+- **Viva Explanation**: Used for auditing the most recent payment transactions, enabling instant audit inspection and $O(1)$ rollback/undo functionality for the latest station operations.
+
+### 3. Key Viva FAQ
+
+**Q1: Why use Crow instead of Node.js / Express for the backend?**
+*A:* Crow is a modern C++ microframework utilizing Boost.Asio for asynchronous I/O. It provides native C++ execution speeds, direct memory access for custom DSA structures (avoiding serialization overhead between DSA and web server), and thread-safe routing with minimal memory footprint.
+
+**Q2: How are passwords secured?**
+*A:* Passwords use the Bcrypt adaptive hashing algorithm with 10 salt rounds (1024 iterations of Blowfish cipher). Bcrypt is intentionally compute-intensive to prevent brute-force and rainbow table attacks. Legacy SHA-256 passwords from seed data are automatically upgraded to bcrypt hashes upon first startup.
+
+**Q3: How does JWT authentication work with role-based authorization?**
+*A:* The backend issues RFC 7519 JSON Web Tokens signed using HMAC-SHA256 (`HS256`). When a protected route is requested, `requireAuth()` decodes the payload, verifies expiration (`exp`), verifies constant-time signature equality against the $\ge 32$-character `JWT_SECRET`, and verifies that the `role` matches required authorization (`user`, `operator`, or `admin`).
+
+**Q4: How does optimistic UI work on the frontend?**
+*A:* The React frontend updates local UI state immediately upon user action (e.g., adding an EV or changing station status) to ensure a zero-latency user experience. In the background, an asynchronous HTTP request is sent to the Crow backend. If the request fails, the frontend catches the exception, displays an alert, and rolls back the UI state to its previous snapshot.
 
 ---
 
-## 8. License & Academic Integrity
+## 10. Windows Installation Troubleshooting & FAQ
+
+### Issue 1: `'nmake' '-?' failed with: no such file or directory`
+- **Cause**: On Windows systems without Microsoft Visual Studio Command Prompt loaded, CMake's default generator tries to use `NMake Makefiles`.
+- **Solution**: Explicitly configure CMake using MinGW Makefiles:
+  ```powershell
+  cmake -B backend/build -S backend -G "MinGW Makefiles"
+  cmake --build backend/build
+  ```
+
+### Issue 2: `Missing script: "dev:full"` or `Missing script: "dev:backend"`
+- **Cause**: The original upstream repository's `main` branch predates the integration scripts.
+- **Solution**: Ensure you are running on the integrated branch containing PR #8 (`feature/final-integration-testing`), which provides `scripts/dev-full.js`, `scripts/dev-backend.js`, and `scripts/test-e2e-scenarios.js`.
+
+### Issue 3: Port 8080 or Port 3000 already in use
+- **Cause**: A previous server instance or another local program is already bound to port 8080 or 3000.
+- **Solution**: In PowerShell, locate and terminate the process holding the port:
+  ```powershell
+  # Find processes listening on ports 8080 or 3000:
+  Get-NetTCPConnection -LocalPort 8080,3000 -State Listen | Format-Table -AutoSize
+
+  # Terminate lingering backend process:
+  Stop-Process -Name smart_ev_hub_backend -Force -ErrorAction SilentlyContinue
+  ```
+
+### Issue 4: `JWT_SECRET must be at least 32 characters long`
+- **Cause**: For security hardening against offline brute-force attacks, the C++ JWT utility enforces a minimum 32-character key length.
+- **Solution**: Ensure your `.env` contains a secret with at least 32 characters, or rely on `scripts/dev-backend.js` which automatically defaults to a 60-character safe dev secret if absent.
+
+---
+
+## 11. License & Academic Integrity
 
 Developed for **Project-Based Learning (PBL)** by the Smart EV Hub Team. All rights reserved.

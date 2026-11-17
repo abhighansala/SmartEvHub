@@ -5,6 +5,7 @@
 
 // Simple Electric Vehicle (EV) Domain Model
 // Created by: Priyanshu Dutt (EV Management Module Owner, ID: 2519460)
+// Enhanced for User Data Isolation & Ownership Control
 class EV {
 private:
     std::string id;              // e.g., "EV-101"
@@ -15,6 +16,7 @@ private:
     std::string status;          // "available", "charging", "waiting", "swapping"
     std::string lastActivity;    // Date/time string
     std::string registeredAt;    // Date/time string
+    int userId;                  // Associated User account ID (from Users table, 0 if unassigned)
 
 public:
     EV() {
@@ -26,11 +28,12 @@ public:
         status = "available";
         lastActivity = "";
         registeredAt = "";
+        userId = 0;
     }
 
     EV(std::string evId, std::string owner, std::string evModel,
        double capacity, double charge, std::string evStatus = "available",
-       std::string activity = "", std::string registered = "") {
+       std::string activity = "", std::string registered = "", int uid = 0) {
         id = evId;
         ownerName = owner;
         model = evModel;
@@ -39,6 +42,7 @@ public:
         status = evStatus;
         lastActivity = activity;
         registeredAt = registered;
+        userId = uid;
     }
 
     // Getters
@@ -50,6 +54,7 @@ public:
     std::string getStatus() const { return status; }
     std::string getLastActivity() const { return lastActivity; }
     std::string getRegisteredAt() const { return registeredAt; }
+    int getUserId() const { return userId; }
 
     // Setters
     void setId(const std::string& newId) { id = newId; }
@@ -60,6 +65,7 @@ public:
     void setStatus(const std::string& newStatus) { status = newStatus; }
     void setLastActivity(const std::string& activity) { lastActivity = activity; }
     void setRegisteredAt(const std::string& registered) { registeredAt = registered; }
+    void setUserId(int uid) { userId = uid; }
 
     // Validation according to PRD Rules:
     // - Battery percentage must be between 0 and 100

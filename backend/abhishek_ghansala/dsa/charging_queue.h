@@ -4,7 +4,7 @@
 #include <iostream>
 #include <string>
 
-const int CHARGING_QUEUE_CAPACITY = 20;
+const int CHARGING_QUEUE_CAPACITY = 50;
 
 // Educational implementation of a FIFO (First-In-First-Out) Queue
 // Uses a simple fixed-size array with FRONT and REAR indices
@@ -51,6 +51,9 @@ public:
 
     // Check if vehicleId is already waiting in queue
     bool contains(const std::string& vehicleId) const;
+
+    // Remove specific vehicleId from queue (shifts subsequent items preserving FIFO order)
+    bool remove(const std::string& vehicleId);
 };
 
 #endif

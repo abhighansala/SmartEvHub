@@ -36,7 +36,7 @@ import type { EV, EVStatus } from '@/types';
 export default function EVManagement() {
   const theme = useTheme();
   const navigate = useNavigate();
-  const { evs, addEV, deleteEV, updateEV } = useApp();
+  const { evs, addEV, deleteEV, updateEV, currentUser } = useApp();
 
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('all');
@@ -71,7 +71,13 @@ export default function EVManagement() {
       });
     } else {
       setEditEV(null);
-      setFormData({ id: '', owner: '', model: '', batteryCapacity: '', currentCharge: '' });
+      setFormData({
+        id: '',
+        owner: currentUser?.role === 'user' ? (currentUser?.name || '') : '',
+        model: '',
+        batteryCapacity: '',
+        currentCharge: '',
+      });
     }
     setFormErrors({});
     setFormOpen(true);
@@ -124,7 +130,7 @@ export default function EVManagement() {
     <Box>
       <PageHeader
         title="EV Management"
-        subtitle="Manage registered electric vehicles"
+        subtitle={currentUser?.role === 'user' ? 'Manage your registered electric vehicles' : 'Manage registered electric vehicles across the hub'}
         action={
           <Button variant="contained" startIcon={<AddOutlined />} onClick={() => openForm()}>
             Register EV

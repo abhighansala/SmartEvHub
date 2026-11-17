@@ -49,9 +49,9 @@ export const Login = () => {
     try {
       // 1. Try real C++ Crow backend login endpoint
       const res = await api.login(email.trim(), password);
-      if (res && res.success && res.user) {
+      if (res && res.success && res.user && res.token) {
         login(res.user, res.token);
-        navigate('/dashboard');
+        navigate('/dashboard', { replace: true });
         return;
       } else {
         showSnackbar(res.message || 'Invalid credentials', 'error');

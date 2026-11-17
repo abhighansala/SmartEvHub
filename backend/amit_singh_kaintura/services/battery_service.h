@@ -30,15 +30,33 @@ private:
     Database* db;                           // Pointer to shared SQLite database
     Battery batteryArray[MAX_BATTERIES];    // Fixed-size array of Battery objects (no vectors)
     int batteryCount;                       // Current count of batteries in array
+    double m_chargingPower;                 // Dock charging power in kW (default 25.0 kW)
+    double m_speedMultiplier;               // Simulation speed multiplier (default 20.0x)
 
     // Helper method to populate initial mock inventory if DB is empty or unavailable
     void seedDefaultBatteries();
+
+    // Ensure SQLite schema contains charging_start and initial_charge and clean up duplicate vehicle assignments
+    void ensureSchemaAndReconcile();
 
 public:
     // -------------------------------------------------------------------------
     // Constructor: accepts optional Database pointer
     // -------------------------------------------------------------------------
     BatteryService(Database* database = nullptr);
+
+    // Simulation speed & power configuration
+    double getChargingPower() const { return m_chargingPower; }
+    void setChargingPower(double power) { if (power > 0.0) m_chargingPower = power; }
+
+    double getSimulationSpeedMultiplier() const { return m_speedMultiplier; }
+    void setSimulationSpeedMultiplier(double mult) { if (mult > 0.0) m_speedMultiplier = mult; }
+
+    // Reconcile multi-battery anomalies across vehicles in SQLite
+    bool reconcileInventory();
+
+    // Backend-driven charging simulation for returned batteries in charging docks
+    int advanceChargingBatteries(SwapQueue* swapQueue = nullptr, TransactionStack* txnStack = nullptr);
 
     // -------------------------------------------------------------------------
     // 1. Inventory Retrieval Operations (TCS 302: Linear Traversal)
@@ -75,7 +93,8 @@ public:
 
     // Enhanced swap: handles incoming depleted battery, allocates fresh battery
     bool performSwap(const std::string& evId, const std::string& oldBatteryId,
-                     double requiredCapacity, Battery& outGivenBattery, Transaction* outTxn = nullptr);
+                     double requiredCapacity, Battery& outGivenBattery, Transaction* outTxn = nullptr,
+                     int callerUserId = 0, const std::string& callerRole = "user");
 
     // -------------------------------------------------------------------------
     // 4. Swap Queue Management & Recovery Operations

@@ -1,3 +1,6 @@
+#include <thread>
+#include <atomic>
+#include <chrono>
 #include <crow.h>
 #include <crow/middlewares/cors.h>
 #include <iostream>
@@ -141,15 +144,34 @@ int main(int argc, char* argv[])
     registerChargingRoutes(app, stationService, chargingQueue, &txnStack);
     registerBatteryRoutes(app, batteryService, &swapQueue, &txnStack);
     registerSwapRoutes(app, batteryService, swapQueue, &txnStack);
-    registerDSARoutes(app, chargingQueue, swapQueue, txnStack);
+    registerDSARoutes(app, chargingQueue, swapQueue, txnStack, &stationService, &db);
     registerTransactionRoutes(app, txnService);
     registerAnalyticsRoutes(app, txnService);
 
     std::cout << "\n[Server Ready] Listening on http://localhost:" << port << "\n";
     std::cout << "Press Ctrl+C to stop the server.\n\n";
 
+    // Background progression worker: advances live charging sessions and battery charging docks every 2 seconds
+    std::atomic<bool> serverRunning{true};
+    std::thread progressionWorker([&stationService, &batteryService, &chargingQueue, &swapQueue, &txnStack, &serverRunning]() {
+        while (serverRunning.load()) {
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+            if (!serverRunning.load()) break;
+            try {
+                stationService.advanceActiveSessions(&chargingQueue);
+                batteryService.advanceChargingBatteries(&swapQueue, &txnStack);
+            } catch (...) {
+            }
+        }
+    });
+
     // Run on configured port (standard 8080 for local backend)
     app.port(port).run();
+
+    serverRunning.store(false);
+    if (progressionWorker.joinable()) {
+        progressionWorker.join();
+    }
 
     return 0;
 }
