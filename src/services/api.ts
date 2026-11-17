@@ -162,6 +162,17 @@ export const api = {
     return request('/stations');
   },
 
+  async getStationById(id: string) {
+    return request(`/stations/${id}`);
+  },
+
+  async createStation(station: any) {
+    return request('/stations', {
+      method: 'POST',
+      body: JSON.stringify(station),
+    });
+  },
+
   async getSessions(status?: string) {
     const query = status ? `?status=${encodeURIComponent(status)}` : '';
     return request(`/sessions${query}`);

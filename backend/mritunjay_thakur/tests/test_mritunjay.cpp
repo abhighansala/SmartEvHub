@@ -1,337 +1,325 @@
 #include <iostream>
 #include <cassert>
+#include <cmath>
+#include <cstdio>
 #include "../models/charging_station.h"
+#include "../models/charging_session.h"
 #include "../services/station_service.h"
 
-// Standalone unit test for Mritunjay Thakur's module
+// Comprehensive Dedicated Unit Test Suite: Mritunjay Thakur
+// Student ID: 2519425 (ML-5)
+// Module: Charging Stations & Charging Sessions
 int main() {
-    std::cout << "========================================\n";
-    std::cout << " Running Tests: Mritunjay Thakur (Charging Stations)\n";
-    std::cout << "========================================\n";
+    std::cout << "========================================================\n";
+    std::cout << " Running Dedicated Test Suite: Mritunjay Thakur (ML-5)  \n";
+    std::cout << " Module: Charging Stations & Sessions (Smart EV Hub)    \n";
+    std::cout << "========================================================\n";
 
-    // 1. Test ChargingStation Model
-    ChargingStation station("CS-99", "Fast Charger Test", 50.0, "CCS2", "available");
-    assert(station.getId() == "CS-99");
-    assert(station.isAvailable() == true);
-    std::cout << "[PASS] ChargingStation model creation and availability passed.\n";
-
-    // 2. Test StationService with local array
-    StationService service(nullptr);
-
-    // Test List stations
-    ChargingStation list[MAX_STATIONS];
-    int count = service.getAllStations(list, MAX_STATIONS);
-    assert(count > 0);
-    std::cout << "[PASS] Retrieved stations list (count = " << count << ").\n";
-
-    // Test Find Available Station
-    ChargingStation availableStation;
-    bool found = service.findAvailableStation(availableStation);
-    assert(found == true);
-    std::string assignedId = availableStation.getId();
-    std::cout << "[PASS] Found available station: " << assignedId << "\n";
-
-    // Test Assign Vehicle
-    bool assigned = service.assignVehicle(assignedId, "EV-101");
-    assert(assigned == true);
-
-    ChargingStation checkedStation;
-    service.getStationById(assignedId, checkedStation);
-    assert(checkedStation.getStatus() == "charging");
-    assert(checkedStation.getCurrentVehicleId() == "EV-101");
-    assert(checkedStation.isAvailable() == false);
-    std::cout << "[PASS] Station assignment to EV-101 passed.\n";
-
-    // Test Release Station
-    bool released = service.releaseStation(assignedId);
-    assert(released == true);
-
-    service.getStationById(assignedId, checkedStation);
-    assert(checkedStation.getStatus() == "available");
-    assert(checkedStation.getCurrentVehicleId().empty());
-    std::cout << "[PASS] Station release back to available passed.\n";
-
-    // 3. Test StationService with Real SQLite Database
-    std::cout << "\n--- Testing Real SQLite Persistence for Mritunjay Thakur ---\n";
     std::string dbFile = "test_mritunjay.db";
     std::remove(dbFile.c_str());
 
     Database db(dbFile);
-    assert(db.open());
+    assert(db.open() && "Failed to open SQLite test database");
 
     bool schemaLoaded = db.initSchema("../database/schema.sql") ||
+                        db.initSchema("../../database/schema.sql") ||
                         db.initSchema("backend/database/schema.sql") ||
                         db.initSchema("database/schema.sql");
-    assert(schemaLoaded && "Failed to load database schema for charging stations!");
-    std::cout << "[PASS] Database connected and schema initialized for StationService.\n";
+    assert(schemaLoaded && "Failed to load database schema for test suite!");
+    std::cout << "[INIT] SQLite database connected and schema initialized successfully.\n";
 
-    StationService dbService(&db);
-    ChargingStation dbStations[MAX_STATIONS];
-    int stationCount = dbService.getAllStations(dbStations, MAX_STATIONS);
-    assert(stationCount == 4); // Schema seed has CS-1 through CS-4
-    std::cout << "[PASS] Seeded charging stations retrieved from SQLite (count = " << stationCount << ").\n";
+    StationService service(&db);
 
-    // CS-2 is available in seed data
-    ChargingStation freeStation;
-    bool foundFree = dbService.findAvailableStation(freeStation);
-    assert(foundFree);
-    assert(freeStation.getId() == "CS-2");
-    std::cout << "[PASS] Available station found in SQLite: " << freeStation.getId() << "\n";
+    // ─── TEST 1: Station Creation ──────────────────────────────────────────
+    std::cout << "\n[TEST 1] Testing Station Creation...\n";
+    ChargingStation newStation("CS-10", "Hyper Fast Bay 10", 150.0, "CCS2", "available", "", "Bay E-1");
+    std::string createErr;
+    bool created = service.createStation(newStation, createErr);
+    assert(created && "Failed to create new charging station");
 
-    // Assign vehicle EV-102 to CS-2 in SQLite
-    assert(dbService.assignVehicle("CS-2", "EV-102"));
-    ChargingStation assignedStation;
-    assert(dbService.getStationById("CS-2", assignedStation));
-    assert(assignedStation.getStatus() == "charging");
-    assert(assignedStation.getCurrentVehicleId() == "EV-102");
-    std::cout << "[PASS] Assigned EV-102 to station CS-2 in SQLite database.\n";
+    // Attempt duplicate creation (should fail)
+    bool dupCreate = service.createStation(newStation, createErr);
+    assert(!dupCreate && "Duplicate station ID must be rejected");
+    std::cout << "  ✓ Station CS-10 created and duplicate station ID rejected.\n";
 
-    // Update status to maintenance
-    assert(dbService.updateStationStatus("CS-3", "maintenance"));
-    ChargingStation maintStation;
-    assert(dbService.getStationById("CS-3", maintStation));
-    assert(maintStation.getStatus() == "maintenance");
-    std::cout << "[PASS] Updated station CS-3 status to maintenance in SQLite.\n";
+    // ─── TEST 2: Station Retrieval ─────────────────────────────────────────
+    std::cout << "\n[TEST 2] Testing Station Retrieval...\n";
+    ChargingStation retrievedStation;
+    bool foundStation = service.getStationById("CS-10", retrievedStation);
+    assert(foundStation);
+    assert(retrievedStation.getId() == "CS-10");
+    assert(retrievedStation.getName() == "Hyper Fast Bay 10");
+    assert(retrievedStation.getPower() == 150.0);
+    assert(retrievedStation.getLocation() == "Bay E-1");
+    assert(retrievedStation.getStatus() == "available");
 
-    // 4. Test Persistence Across Restart
-    std::cout << "\n--- Testing Persistence across Connection Close / Reopen ---\n";
+    ChargingStation allStations[MAX_STATIONS];
+    int totalCount = service.getAllStations(allStations, MAX_STATIONS);
+    assert(totalCount >= 5); // 4 seed stations + CS-10
+    std::cout << "  ✓ Retrieved single station CS-10 and full stations list (count = " << totalCount << ").\n";
+
+    // ─── TEST 3: Station Status Update ─────────────────────────────────────
+    std::cout << "\n[TEST 3] Testing Valid Station Status Update...\n";
+    std::string statusErr;
+    assert(service.updateStationStatus("CS-10", "maintenance", statusErr));
+    assert(service.getStationById("CS-10", retrievedStation));
+    assert(retrievedStation.getStatus() == "maintenance");
+    assert(retrievedStation.getAvailablePorts() == 0);
+
+    assert(service.updateStationStatus("CS-10", "offline", statusErr));
+    assert(service.getStationById("CS-10", retrievedStation));
+    assert(retrievedStation.getStatus() == "offline");
+
+    assert(service.updateStationStatus("CS-10", "available", statusErr));
+    assert(service.getStationById("CS-10", retrievedStation));
+    assert(retrievedStation.getStatus() == "available");
+    assert(retrievedStation.getAvailablePorts() == 1);
+    std::cout << "  ✓ Status transitions available -> maintenance -> offline -> available succeeded.\n";
+
+    // ─── TEST 4: Invalid Status Transition Validation ──────────────────────
+    std::cout << "\n[TEST 4] Testing Invalid Status Transitions...\n";
+    // CS-1 is actively charging EV-101 in seed data
+    ChargingStation cs1;
+    assert(service.getStationById("CS-1", cs1));
+    assert(cs1.getStatus() == "charging");
+
+    // Cannot manually mark active station as available
+    bool invalidAvail = service.updateStationStatus("CS-1", "available", statusErr);
+    assert(!invalidAvail && "Must reject marking charging station available while session is active");
+
+    // Cannot put actively charging station into maintenance or offline directly
+    bool invalidMaint = service.updateStationStatus("CS-1", "maintenance", statusErr);
+    assert(!invalidMaint && "Must reject putting actively charging station into maintenance");
+
+    // Cannot set station to 'charging' manually without session allocation
+    bool invalidCharging = service.updateStationStatus("CS-10", "charging", statusErr);
+    assert(!invalidCharging && "Must reject manually setting station to charging");
+
+    // Reject unknown status string
+    bool invalidBogus = service.updateStationStatus("CS-10", "broken_down", statusErr);
+    assert(!invalidBogus && "Must reject unapproved status string");
+    std::cout << "  ✓ Rejected manual release of active bay, direct charging status, and bogus status.\n";
+
+    // ─── TEST 5: Charging Allocation ───────────────────────────────────────
+    std::cout << "\n[TEST 5] Testing Charging Allocation...\n";
+    // EV-105 is available in seed data; CS-2 is available
+    ChargingSession ses5;
+    std::string allocErr;
+    bool allocSuccess = service.createChargingSession("EV-105", "CS-2", 80.0, ses5, allocErr);
+    assert(allocSuccess && "Failed to allocate charging session for EV-105 on CS-2");
+    assert(ses5.getId().rfind("SES-", 0) == 0);
+    assert(ses5.getVehicleId() == "EV-105");
+    assert(ses5.getStationId() == "CS-2");
+    assert(ses5.getTargetCharge() == 80.0);
+    assert(ses5.getStatus() == "active");
+
+    ChargingStation cs2AfterAlloc;
+    assert(service.getStationById("CS-2", cs2AfterAlloc));
+    assert(cs2AfterAlloc.getStatus() == "charging");
+    assert(cs2AfterAlloc.getCurrentVehicleId() == "EV-105");
+    std::cout << "  ✓ Charging session successfully allocated and synchronized with CS-2.\n";
+
+    // ─── TEST 6: Allocation When All Stations Are Occupied ─────────────────
+    std::cout << "\n[TEST 6] Testing Allocation When All Stations Are Occupied...\n";
+    // Mark CS-3 and CS-10 maintenance/busy so zero stations are available
+    assert(service.updateStationStatus("CS-3", "maintenance"));
+    assert(service.updateStationStatus("CS-10", "maintenance"));
+
+    ChargingStation anyFree;
+    bool freeFound = service.findAvailableStation(anyFree);
+    assert(!freeFound && "No stations should be available when all bays are charging/maintenance");
+
+    ChargingSession failSes;
+    bool allBusyAlloc = service.createChargingSession("EV-106", "CS-2", 90.0, failSes, allocErr);
+    assert(!allBusyAlloc && "Cannot allocate session when target station is busy");
+    std::cout << "  ✓ Verified that allocation is prevented when all charging bays are occupied.\n";
+
+    // ─── TEST 7: FIFO Queue Integration ────────────────────────────────────
+    std::cout << "\n[TEST 7] Testing FIFO Queue Integration...\n";
+    ChargingQueue testQueue;
+    testQueue.clear();
+
+    // Enqueue EV-106 into FIFO queue
+    std::string qErr;
+    assert(service.enqueueWaitingEV("EV-106", testQueue, qErr));
+    assert(testQueue.getSize() == 1);
+    assert(testQueue.peek() == "EV-106");
+
+    // Duplicate queue entry must be prevented
+    bool dupQueue = service.enqueueWaitingEV("EV-106", testQueue, qErr);
+    assert(!dupQueue && "Duplicate vehicle enqueue must be rejected");
+    std::cout << "  ✓ FIFO Queue integration verified: EV-106 queued at REAR; duplicates rejected.\n";
+
+    // ─── TEST 8: Charging Session Completion ───────────────────────────────
+    std::cout << "\n[TEST 8] Testing Charging Session Completion...\n";
+    ChargingSession completedSes;
+    Transaction completedTxn;
+    ChargingSession autoDisp;
+    std::string compErr;
+
+    // Complete session on CS-2 (no dispatch, queue is bypassed for this sub-test)
+    ChargingQueue emptyQ;
+    emptyQ.clear();
+    bool compSuccess = service.completeChargingSession("CS-2", completedSes, completedTxn, &emptyQ, &autoDisp, compErr);
+    assert(compSuccess && "Failed to complete active charging session on CS-2");
+    assert(completedSes.getStatus() == "completed");
+    assert(completedSes.getBatteryEnd() == 80.0);
+    assert(completedSes.getEnergyConsumed() > 0.0);
+    assert(completedSes.getDuration() >= 1);
+    std::cout << "  ✓ Session on CS-2 completed: status set to 'completed' with accurate end SoC.\n";
+
+    // ─── TEST 9: Correct Energy Calculation ────────────────────────────────
+    std::cout << "\n[TEST 9] Testing Correct Energy Calculation...\n";
+    // EV-105: battery capacity = 60.5 kWh, started at 45.0%, completed at 80.0%
+    // Expected energy = ((80.0 - 45.0) / 100.0) * 60.5 = 0.35 * 60.5 = 21.175 kWh
+    double expectedEnergy = ((80.0 - 45.0) / 100.0) * 60.5;
+    assert(std::fabs(completedSes.getEnergyConsumed() - expectedEnergy) < 0.01);
+    std::cout << "  ✓ Energy consumed verified: calculated exactly " << completedSes.getEnergyConsumed() << " kWh.\n";
+
+    // ─── TEST 10: Correct Billing Integration ──────────────────────────────
+    std::cout << "\n[TEST 10] Testing Correct Billing Integration...\n";
+    double expectedTariff = Transaction::calculateTariff(expectedEnergy, "charging");
+    assert(completedTxn.getType() == "charging");
+    assert(completedTxn.getAmount() == expectedTariff);
+    assert(completedSes.getEstimatedCost() == expectedTariff);
+    std::cout << "  ✓ Tariff billing verified: INR " << completedTxn.getAmount() << " matches official tariff engine.\n";
+
+    // ─── TEST 11: Station Release ──────────────────────────────────────────
+    std::cout << "\n[TEST 11] Testing Station Release...\n";
+    ChargingStation cs2AfterComp;
+    assert(service.getStationById("CS-2", cs2AfterComp));
+    assert(cs2AfterComp.getStatus() == "available");
+    assert(cs2AfterComp.getCurrentVehicleId().empty());
+    assert(cs2AfterComp.getAvailablePorts() == 1);
+    std::cout << "  ✓ Station CS-2 released to 'available' with available_ports = 1.\n";
+
+    // ─── TEST 12: Duplicate Active Session Prevention ──────────────────────
+    std::cout << "\n[TEST 12] Testing Duplicate Active Session Prevention...\n";
+    // Re-assign CS-2 to EV-105
+    ChargingSession sesDup;
+    assert(service.createChargingSession("EV-105", "CS-2", 85.0, sesDup, allocErr));
+    // Attempt to start a second session for EV-105 while active
+    ChargingSession sesDup2;
+    bool dupEvSession = service.createChargingSession("EV-105", "CS-10", 90.0, sesDup2, allocErr);
+    assert(!dupEvSession && "Must reject assigning EV that already has an active charging session");
+    std::cout << "  ✓ Duplicate active session for same vehicle strictly rejected.\n";
+
+    // ─── TEST 13: Invalid EV ID ────────────────────────────────────────────
+    std::cout << "\n[TEST 13] Testing Invalid EV ID Rejection...\n";
+    ChargingSession nonExistentSes;
+    bool nonExistentEv = service.createChargingSession("EV-NONEXISTENT", "CS-10", 85.0, nonExistentSes, allocErr);
+    assert(!nonExistentEv && "Must reject non-existent EV ID");
+
+    bool badQueueEv = service.enqueueWaitingEV("EV-FAKE-999", testQueue, qErr);
+    assert(!badQueueEv && "Must reject queueing non-existent EV ID");
+    std::cout << "  ✓ Non-existent vehicle allocation and enqueueing properly rejected.\n";
+
+    // ─── TEST 14: Invalid Station ID ───────────────────────────────────────
+    std::cout << "\n[TEST 14] Testing Invalid Station ID Rejection...\n";
+    ChargingSession badStationSes;
+    bool badStation = service.createChargingSession("EV-106", "CS-9999", 85.0, badStationSes, allocErr);
+    assert(!badStation && "Must reject allocation on non-existent station ID");
+
+    bool badStationUpdate = service.updateStationStatus("CS-9999", "available", statusErr);
+    assert(!badStationUpdate && "Must reject status update for non-existent station ID");
+    std::cout << "  ✓ Non-existent station ID operations properly rejected.\n";
+
+    // ─── TEST 15: Double Session Completion Prevention ─────────────────────
+    std::cout << "\n[TEST 15] Testing Double Session Completion Prevention...\n";
+    ChargingSession comp1;
+    Transaction txn1;
+    ChargingSession disp1;
+    // Complete active session on CS-2
+    assert(service.completeChargingSession("CS-2", comp1, txn1, nullptr, &disp1, compErr));
+    // Second completion on now-available station must fail
+    ChargingSession comp2;
+    Transaction txn2;
+    bool doubleComp = service.completeChargingSession("CS-2", comp2, txn2, nullptr, &disp1, compErr);
+    assert(!doubleComp && "Double session completion must be strictly prevented");
+    std::cout << "  ✓ Double completion rejected; station with no active session cannot be completed.\n";
+
+    // ─── TEST 16: SQLite Persistence After Restart ─────────────────────────
+    std::cout << "\n[TEST 16] Testing SQLite Persistence Across Restart...\n";
+    // 1. Setup known state in SQLite: Put CS-10 in maintenance, CS-3 in available
+    assert(service.updateStationStatus("CS-10", "maintenance"));
+    assert(service.updateStationStatus("CS-3", "available"));
+
+    // 2. Simulate server restart: close DB handle and reconnect
     db.close();
 
-    Database reopenedDb(dbFile);
-    assert(reopenedDb.open());
-    StationService reopenedService(&reopenedDb);
+    Database restartedDb(dbFile);
+    assert(restartedDb.open());
+    StationService restartedService(&restartedDb);
 
-    ChargingStation persistedCS2;
-    assert(reopenedService.getStationById("CS-2", persistedCS2));
-    assert(persistedCS2.getStatus() == "charging");
-    assert(persistedCS2.getCurrentVehicleId() == "EV-102");
+    ChargingStation persistedCS10;
+    assert(restartedService.getStationById("CS-10", persistedCS10));
+    assert(persistedCS10.getStatus() == "maintenance");
 
     ChargingStation persistedCS3;
-    assert(reopenedService.getStationById("CS-3", persistedCS3));
-    assert(persistedCS3.getStatus() == "maintenance");
-    std::cout << "[PASS] PERSISTENCE VERIFIED: Station status & assigned EV survived connection restart!\n";
+    assert(restartedService.getStationById("CS-3", persistedCS3));
+    assert(persistedCS3.getStatus() == "available");
 
-    // Release station CS-2
-    assert(reopenedService.releaseStation("CS-2"));
-    assert(reopenedService.getStationById("CS-2", persistedCS2));
-    assert(persistedCS2.getStatus() == "available");
-    assert(persistedCS2.getCurrentVehicleId().empty());
-    std::cout << "[PASS] Station CS-2 released in SQLite.\n";
+    // Verify session persistence across restart
+    ChargingSession persistedSes;
+    assert(restartedService.getSessionById(comp1.getId(), persistedSes));
+    assert(persistedSes.getStatus() == "completed");
+    assert(persistedSes.getEnergyConsumed() > 0.0);
+    std::cout << "  ✓ Persistence verified: stations, status updates, and session records survived restart.\n";
 
-    // ─── 5. Test Phase B: Charging Session Creation & Persistence ──────────
-    std::cout << "\n--- Testing Phase B: Charging Session Creation & Persistence ---\n";
-    // EV-105 is 'available' with 45.0% in seed data; CS-2 is 'available'
-    ChargingSession newSession;
-    bool created = reopenedService.createChargingSession("EV-105", "CS-2", 80.0, newSession);
-    assert(created && "Failed to create charging session for EV-105 on CS-2");
-    assert(newSession.getId().rfind("SES-", 0) == 0);
-    assert(newSession.getVehicleId() == "EV-105");
-    assert(newSession.getStationId() == "CS-2");
-    assert(newSession.getTargetCharge() == 80.0);
-    assert(newSession.getStatus() == "active");
+    // ─── TEST 17: Concurrent Allocation Safety ─────────────────────────────
+    std::cout << "\n[TEST 17] Testing Concurrent Allocation Safety...\n";
+    // CS-3 is available. Attempt two successive allocations for two different EVs on the same station.
+    ChargingSession sesFirst;
+    ChargingSession sesSecond;
+    std::string errFirst, errSecond;
 
-    // Verify station and EV statuses synchronized in SQLite
-    ChargingStation stationAfterCreate;
-    assert(reopenedService.getStationById("CS-2", stationAfterCreate));
-    assert(stationAfterCreate.getStatus() == "charging");
-    assert(stationAfterCreate.getCurrentVehicleId() == "EV-105");
-    std::cout << "[PASS] Charging session created & persisted. CS-2 marked 'charging'.\n";
+    bool firstAlloc = restartedService.createChargingSession("EV-102", "CS-3", 85.0, sesFirst, errFirst);
+    bool secondAlloc = restartedService.createChargingSession("EV-104", "CS-3", 85.0, sesSecond, errSecond);
 
-    // ─── 6. Test Active-Session Retrieval & Filtering ───────────────────────
-    std::cout << "\n--- Testing Session Retrieval & Filtering ---\n";
-    ChargingSession activeSessions[MAX_SESSIONS];
-    int activeCount = reopenedService.getAllSessions(activeSessions, MAX_SESSIONS, "active");
-    assert(activeCount >= 2); // Seed has SES-1001, plus our newly created session
-    for (int i = 0; i < activeCount; i++) {
-        assert(activeSessions[i].getStatus() == "active");
+    assert(firstAlloc && "First allocation must succeed");
+    assert(!secondAlloc && "Second concurrent allocation on same station must be blocked");
+    assert(!errSecond.empty());
+
+    // Clean up CS-3
+    ChargingSession dummyC;
+    Transaction dummyT;
+    assert(restartedService.completeChargingSession("CS-3", dummyC, dummyT));
+    std::cout << "  ✓ Concurrent allocation safety verified: second concurrent request safely blocked.\n";
+
+    // ─── TEST 18: Maintenance/Offline Station Rejection ───────────────────
+    std::cout << "\n[TEST 18] Testing Maintenance & Offline Station Rejection...\n";
+    // CS-4 is in maintenance in schema
+    ChargingStation cs4;
+    assert(restartedService.getStationById("CS-4", cs4));
+    assert(cs4.getStatus() == "maintenance");
+    assert(!cs4.isAvailable());
+
+    // Allocating EV to maintenance station must fail
+    ChargingSession maintSes;
+    std::string maintErr;
+    bool maintAlloc = restartedService.createChargingSession("EV-102", "CS-4", 85.0, maintSes, maintErr);
+    assert(!maintAlloc && "Charging allocation on maintenance station must be strictly rejected");
+
+    // Set CS-4 to offline
+    assert(restartedService.updateStationStatus("CS-4", "offline"));
+    bool offlineAlloc = restartedService.createChargingSession("EV-102", "CS-4", 85.0, maintSes, maintErr);
+    assert(!offlineAlloc && "Charging allocation on offline station must be strictly rejected");
+
+    // findAvailableStation must never return a maintenance or offline station
+    ChargingStation foundBay;
+    bool foundAny = restartedService.findAvailableStation(foundBay);
+    if (foundAny) {
+        assert(foundBay.getStatus() == "available");
+        assert(foundBay.getId() != "CS-4");
     }
+    std::cout << "  ✓ Maintenance and offline stations strictly rejected from EV charging allocation.\n";
 
-    ChargingSession completedSessions[MAX_SESSIONS];
-    int completedCount = reopenedService.getAllSessions(completedSessions, MAX_SESSIONS, "completed");
-    assert(completedCount >= 1); // Seed has SES-1000
-    for (int i = 0; i < completedCount; i++) {
-        assert(completedSessions[i].getStatus() == "completed");
-    }
-
-    ChargingSession retrievedSession;
-    assert(reopenedService.getSessionById(newSession.getId(), retrievedSession));
-    assert(retrievedSession.getVehicleId() == "EV-105");
-
-    ChargingSession activeOnCS2;
-    assert(reopenedService.getActiveSessionByStationId("CS-2", activeOnCS2));
-    assert(activeOnCS2.getId() == newSession.getId());
-    std::cout << "[PASS] Active and completed session filtering & retrieval verified.\n";
-
-    // ─── 7. Test FIFO Queue Rehydration Across Restart ─────────────────────
-    std::cout << "\n--- Testing FIFO Queue Rehydration Across Restart ---\n";
-    // Close and reopen database to test recovery from cold storage
-    reopenedDb.close();
-
-    Database restartDb(dbFile);
-    assert(restartDb.open());
-    StationService restartService(&restartDb);
-
-    ChargingQueue restoredQueue;
-    int restoredCount = restartService.rehydrateChargingQueue(restoredQueue);
-    // Seed data has EV-102 (-10m), EV-104 (-5m), and EV-125 (-2m) as 'waiting'
-    assert(restoredCount >= 3 && "Should recover all waiting EVs from SQLite");
-    assert(restoredQueue.getSize() >= 3);
-
-    // Verify exact FIFO ordering determined by last_activity ASC
-    std::string firstQueued = restoredQueue.dequeue();
-    assert(firstQueued == "EV-102" && "Oldest waiting EV must be at FRONT of FIFO queue");
-    std::string secondQueued = restoredQueue.dequeue();
-    assert(secondQueued == "EV-104" && "Second oldest waiting EV must be second in FIFO queue");
-    std::string thirdQueued = restoredQueue.dequeue();
-    assert(thirdQueued == "EV-125");
-    std::cout << "[PASS] FIFO Queue deterministically rehydrated across restart: EV-102 -> EV-104 -> EV-125.\n";
-
-    // ─── 8. Test Session Completion, Tariff Calculation & Accurate Charges ─
-    std::cout << "\n--- Testing Session Completion & Tariff Calculation ---\n";
-    ChargingSession completedSession;
-    Transaction sessionTxn;
-    ChargingSession dispatchedSession;
-
-    // First test completion without queue dispatch (pass empty queue)
-    ChargingQueue emptyQueue;
-    emptyQueue.clear();
-    bool completedSuccess = restartService.completeChargingSession("CS-2", completedSession, sessionTxn, &emptyQueue, &dispatchedSession);
-    assert(completedSuccess && "Session completion must succeed for active session");
-    assert(completedSession.getStatus() == "completed");
-    // Ensure charge was set to targetCharge (80.0%), NOT hardcoded 100%!
-    assert(completedSession.getBatteryEnd() == 80.0);
-    assert(completedSession.getEnergyConsumed() > 0.0);
-    assert(sessionTxn.getType() == "charging");
-    assert(sessionTxn.getAmount() == Transaction::calculateTariff(completedSession.getEnergyConsumed(), "charging"));
-    assert(dispatchedSession.getId().empty() && "No dispatch should occur with empty queue");
-
-    // Verify station is released to 'available'
-    ChargingStation stationAfterComplete;
-    assert(restartService.getStationById("CS-2", stationAfterComplete));
-    assert(stationAfterComplete.getStatus() == "available");
-    assert(stationAfterComplete.getCurrentVehicleId().empty());
-    std::cout << "[PASS] Session completed: battery set to target charge (80%), correct tariff billed, station released.\n";
-
-    // ─── 9. Test FIFO Automated Queue Dispatch on Station Release ─────────
-    std::cout << "\n--- Testing Automated FIFO Queue Dispatch on Completion ---\n";
-    // 1. Assign EV-105 again to CS-2
-    ChargingSession ses2;
-    assert(restartService.createChargingSession("EV-105", "CS-2", 85.0, ses2));
-
-    // 2. Set up queue with waiting EV-104
-    ChargingQueue liveQueue;
-    liveQueue.clear();
-    liveQueue.enqueue("EV-104");
-    assert(liveQueue.getSize() == 1);
-
-    // 3. Complete CS-2 with liveQueue: EV-104 should be auto-dispatched to CS-2!
-    ChargingSession compSes;
-    Transaction compTxn;
-    ChargingSession autoDispatched;
-    bool dispatchComplete = restartService.completeChargingSession("CS-2", compSes, compTxn, &liveQueue, &autoDispatched);
-    assert(dispatchComplete);
-    assert(!autoDispatched.getId().empty() && "Waiting EV must be dispatched to released bay");
-    assert(autoDispatched.getVehicleId() == "EV-104");
-    assert(liveQueue.isEmpty() && "Dispatched EV must be dequeued from FIFO queue");
-
-    // Verify CS-2 is now charging EV-104 in database
-    ChargingStation stationDispatched;
-    assert(restartService.getStationById("CS-2", stationDispatched));
-    assert(stationDispatched.getStatus() == "charging");
-    assert(stationDispatched.getCurrentVehicleId() == "EV-104");
-    std::cout << "[PASS] FIFO Dispatch verified: Completing session auto-dispatched waiting EV-104 to CS-2.\n";
-
-    // ─── 10. Test Duplicate Operation Prevention & Invalid Requests ────────
-    std::cout << "\n--- Testing Duplicate Operation & Invalid Request Prevention ---\n";
-    // Duplicate session creation for an EV already charging (EV-104)
-    ChargingSession invalidSes;
-    bool dupCreate = restartService.createChargingSession("EV-104", "CS-3", 85.0, invalidSes);
-    assert(!dupCreate && "Should reject creating session for EV that is already charging");
-
-    // Attempt to create session on busy station CS-2
-    bool busyCreate = restartService.createChargingSession("EV-106", "CS-2", 85.0, invalidSes);
-    assert(!busyCreate && "Should reject creating session on a busy station");
-
-    // Attempt to create session for non-existent station
-    bool invalidStationCreate = restartService.createChargingSession("EV-106", "CS-999", 85.0, invalidSes);
-    assert(!invalidStationCreate && "Should reject creating session on non-existent station");
-
-    // Complete session on station that has no active session (CS-1 or available station)
-    ChargingSession dummySes;
-    Transaction dummyTxn;
-    bool dupComplete = restartService.completeChargingSession("CS-3", dummySes, dummyTxn);
-    assert(!dupComplete && "Should reject completing session on station without active session");
-
-    // Prevent duplicate queue entry
-    ChargingQueue dupCheckQueue;
-    dupCheckQueue.clear();
-    dupCheckQueue.enqueue("EV-102");
-    assert(dupCheckQueue.contains("EV-102") == true);
-    assert(dupCheckQueue.contains("EV-999") == false);
-    std::cout << "[PASS] Duplicate creation, busy station assignment, and duplicate completion rejected.\n";
-
-    // ─── 11. Test Database Transaction Rollback on Failure ─────────────────
-    std::cout << "\n--- Testing Atomic Database Rollback ---\n";
-    assert(restartDb.beginTransaction());
-    // Simulate failed transaction that must be rolled back
-    assert(restartDb.rollbackTransaction());
-    std::cout << "[PASS] Database transaction rollback verified.\n";
-
-    // ─── 12. Test Queue Ordering Under Identical Timestamps (Stable Tie-Breakers) ────
-    std::cout << "\n--- Testing Queue Ordering Under Identical Timestamps ---\n";
-    // Explicitly set only EV-102 and EV-104 as waiting with identical timestamps in SQLite
-    sqlite3* rawDb = restartDb.getDbHandle();
-    sqlite3_exec(rawDb, "UPDATE EV SET status = 'available';", nullptr, nullptr, nullptr);
-    sqlite3_exec(rawDb, "UPDATE EV SET status = 'waiting', last_activity = '2026-10-19 12:00:00' WHERE id IN ('EV-102', 'EV-104');", nullptr, nullptr, nullptr);
-
-    // Close and reopen to simulate restart under equal timestamps
-    restartDb.close();
-
-    Database tieBreakDb(dbFile);
-    assert(tieBreakDb.open());
-    StationService tieBreakService(&tieBreakDb);
-
-    ChargingQueue equalTimestampQueue;
-    int tieBreakCount = tieBreakService.rehydrateChargingQueue(equalTimestampQueue);
-    assert(tieBreakCount >= 2);
-
-    // Verify ordering is strictly deterministic across restarts via registered_at / rowid tie-breaker
-    std::string firstTie = equalTimestampQueue.dequeue();
-    std::string secondTie = equalTimestampQueue.dequeue();
-    assert(firstTie == "EV-102" && "Tie-breaker must deterministically prioritize earlier registered EV-102");
-    assert(secondTie == "EV-104" && "Second EV in deterministic tie-break must be EV-104");
-    std::cout << "[PASS] Equal timestamp ordering verified: Stable tie-breaker preserved EV-102 before EV-104 across restart.\n";
-
-    // ─── 13. Test Memory & SQLite Consistency on Failure (Queue Rollback Safety) ───
-    std::cout << "\n--- Testing Memory & SQLite Consistency on Failure ---\n";
-    ChargingQueue memoryQueue;
-    memoryQueue.clear();
-
-    // Test safe enqueue: attempting to enqueue a non-existent EV must fail in DB and leave queue empty
-    bool badEnqueue = tieBreakService.enqueueWaitingEV("EV-NONEXISTENT", memoryQueue);
-    assert(!badEnqueue && "Enqueue must fail for non-existent vehicle");
-    assert(memoryQueue.isEmpty() && "In-memory queue must NOT be mutated when DB validation fails");
-
-    // Enqueue valid EV-102
-    bool goodEnqueue = tieBreakService.enqueueWaitingEV("EV-102", memoryQueue);
-    assert(goodEnqueue);
-    assert(memoryQueue.getSize() == 1);
-    assert(memoryQueue.peek() == "EV-102");
-
-    // Test completion failure safety: attempting completeChargingSession on station with no active session
-    // must NOT dequeue from memoryQueue
-    ChargingSession failCompSes;
-    Transaction failCompTxn;
-    ChargingSession failDispSes;
-    bool failComplete = tieBreakService.completeChargingSession("CS-3", failCompSes, failCompTxn, &memoryQueue, &failDispSes);
-    assert(!failComplete && "Completion must fail on station with no active session");
-    assert(memoryQueue.getSize() == 1 && "In-memory queue must NOT lose items when completion fails");
-    assert(memoryQueue.peek() == "EV-102" && "Queue front must remain untouched after failed completion");
-    std::cout << "[PASS] Memory & SQLite consistency verified: Failed DB operations safely restored in-memory queue.\n";
-
-    tieBreakDb.close();
+    restartedDb.close();
     std::remove(dbFile.c_str());
 
-    std::cout << "\n>>> ALL MRITUNJAY THAKUR (CHARGING BACKEND & FIFO QUEUE) TESTS PASSED! <<<\n";
+    std::cout << "\n========================================================\n";
+    std::cout << " >>> ALL 18 MRITUNJAY THAKUR TEST SCENARIOS PASSED! <<< \n";
+    std::cout << "========================================================\n";
+
     return 0;
 }

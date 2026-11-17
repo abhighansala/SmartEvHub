@@ -57,6 +57,7 @@ interface AppContextType {
   deleteEV: (id: string) => Promise<boolean>;
 
   // Station operations (Optimistic with Rollback)
+  addStation: (station: Partial<Station>) => Promise<boolean>;
   updateStation: (id: string, data: Partial<Station>) => Promise<void>;
 
   // Battery operations (Optimistic with Rollback)
@@ -425,6 +426,41 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [evs, isBackendOnline, showSnackbar]);
 
   // ─── Station with Optimistic UI & Automatic Rollback ──────
+  const addStation = useCallback(async (station: Partial<Station>): Promise<boolean> => {
+    const prevStations = stations;
+    const newSt: Station = {
+      id: station.id || `CS-${stations.length + 1}`,
+      name: station.name || 'Charging Bay',
+      power: station.power || 50.0,
+      connectorType: (station.connectorType as any) || 'CCS2',
+      status: station.status || 'available',
+      currentEV: null,
+      sessionStart: null,
+      location: station.location || 'Bay 1',
+    };
+
+    if (isBackendOnline) {
+      try {
+        const res = await api.createStation(newSt);
+        if (res && res.success) {
+          showSnackbar(res.message || `Station ${newSt.id} created successfully`, 'success');
+          await refreshBackendData();
+          return true;
+        } else {
+          showSnackbar(res?.message || 'Failed to create station', 'error');
+          return false;
+        }
+      } catch (e: any) {
+        showSnackbar(e.message || 'Failed to create station on backend', 'error');
+        return false;
+      }
+    } else {
+      setStations(prev => [...prev, newSt]);
+      showSnackbar(`Station ${newSt.id} created locally (Offline Mode)`, 'info');
+      return true;
+    }
+  }, [stations, isBackendOnline, refreshBackendData, showSnackbar]);
+
   const updateStation = useCallback(async (id: string, data: Partial<Station>) => {
     const prevStations = stations;
     setStations(prev => prev.map(s => s.id === id ? { ...s, ...data } : s));
@@ -783,7 +819,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       refreshBackendData,
       isAuthenticated, currentUser, login, logout,
       addEV, updateEV, deleteEV,
-      updateStation,
+      addStation, updateStation,
       addBattery, updateBattery,
       processNextCharging, removeChargingRequest, addChargingRequest,
       processNextSwap, removeSwapRequest, addSwapRequest,

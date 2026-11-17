@@ -38,6 +38,7 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
             }
             s["targetCharge"] = list[i].getTargetCharge();
             s["energyConsumed"] = list[i].getEnergyConsumed();
+            s["duration"] = list[i].getDuration();
             s["estimatedCost"] = list[i].getEstimatedCost();
             s["status"] = list[i].getStatus();
             sessionsJson.push_back(std::move(s));
@@ -66,6 +67,7 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
             s["batteryEnd"] = nullptr;
             s["targetCharge"] = list[i].getTargetCharge();
             s["energyConsumed"] = list[i].getEnergyConsumed();
+            s["duration"] = list[i].getDuration();
             s["estimatedCost"] = list[i].getEstimatedCost();
             s["status"] = list[i].getStatus();
             sessionsJson.push_back(std::move(s));
@@ -97,6 +99,8 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
             res["success"] = false;
             res["assigned"] = false;
             res["queued"] = true;
+            res["queuePosition"] = chargingQueue.getSize();
+            res["queueSize"] = chargingQueue.getSize();
             res["message"] = "Vehicle " + evId + " is already in the Charging Queue.";
             return crow::response(400, res);
         }
@@ -105,7 +109,8 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
         ChargingStation freeStation;
         if (stationService.findAvailableStation(freeStation)) {
             ChargingSession newSession;
-            if (stationService.createChargingSession(evId, freeStation.getId(), targetCharge, newSession)) {
+            std::string createError;
+            if (stationService.createChargingSession(evId, freeStation.getId(), targetCharge, newSession, createError)) {
                 res["success"] = true;
                 res["assigned"] = true;
                 res["stationId"] = freeStation.getId();
@@ -117,7 +122,7 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
             } else {
                 res["success"] = false;
                 res["assigned"] = false;
-                res["message"] = "Failed to create charging session for vehicle " + evId + " (vehicle may already be charging or unavailable)";
+                res["message"] = "Failed to create charging session: " + createError;
                 return crow::response(400, res);
             }
         } else {
@@ -131,20 +136,23 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
             }
 
             // Atomically synchronize SQLite EV status to 'waiting' and enqueue into FIFO queue
-            if (stationService.enqueueWaitingEV(evId, chargingQueue)) {
+            std::string enqueueError;
+            if (stationService.enqueueWaitingEV(evId, chargingQueue, enqueueError)) {
+                int position = chargingQueue.getSize();
                 res["success"] = true;
                 res["assigned"] = false;
                 res["queued"] = true;
-                res["message"] = "All stations currently busy. Added vehicle " + evId + " to Charging Queue.";
-                res["queueSize"] = chargingQueue.getSize();
+                res["queuePosition"] = position;
+                res["queueSize"] = position;
                 res["frontIndex"] = chargingQueue.getFrontIndex();
                 res["rearIndex"] = chargingQueue.getRearIndex();
+                res["message"] = "All stations currently busy. Added vehicle " + evId + " to Charging Queue (Position: " + std::to_string(position) + ").";
                 return crow::response(200, res);
             } else {
                 res["success"] = false;
                 res["assigned"] = false;
                 res["queued"] = false;
-                res["message"] = "Failed to enqueue vehicle " + evId + " (vehicle may not exist, is already in queue, or is currently charging)";
+                res["message"] = "Failed to enqueue vehicle: " + enqueueError;
                 return crow::response(400, res);
             }
         }
@@ -161,18 +169,14 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
             return crow::response(400, res);
         }
 
-        std::string stationId = "";
+        std::string targetIdentifier = "";
         if (json.has("stationId")) {
-            stationId = json["stationId"].s();
+            targetIdentifier = json["stationId"].s();
         } else if (json.has("sessionId")) {
-            std::string sessionId = json["sessionId"].s();
-            ChargingSession ses;
-            if (stationService.getSessionById(sessionId, ses)) {
-                stationId = ses.getStationId();
-            }
+            targetIdentifier = json["sessionId"].s();
         }
 
-        if (stationId.empty()) {
+        if (targetIdentifier.empty()) {
             res["success"] = false;
             res["message"] = "stationId or sessionId is required";
             return crow::response(400, res);
@@ -181,33 +185,37 @@ void registerChargingRoutes(crow::App<crow::CORSHandler>& app,
         ChargingSession completedSession;
         Transaction outTxn;
         ChargingSession dispatchedSession;
+        std::string compError;
 
-        if (stationService.completeChargingSession(stationId, completedSession, outTxn, &chargingQueue, &dispatchedSession)) {
+        if (stationService.completeChargingSession(targetIdentifier, completedSession, outTxn, &chargingQueue, &dispatchedSession, compError)) {
             // Push completed transaction to Abhishek Ghansala's LIFO stack if available
             if (txnStack != nullptr) {
                 txnStack->push(outTxn.getId());
             }
 
             res["success"] = true;
-            res["message"] = "Station " + stationId + " session completed.";
+            res["message"] = "Station " + completedSession.getStationId() + " session completed.";
             res["sessionId"] = completedSession.getId();
+            res["stationId"] = completedSession.getStationId();
+            res["evId"] = completedSession.getVehicleId();
             res["transactionId"] = outTxn.getId();
             res["amount"] = outTxn.getAmount();
             res["energyDelivered"] = outTxn.getEnergyDelivered();
+            res["duration"] = completedSession.getDuration();
             res["finalCharge"] = completedSession.getBatteryEnd();
 
             if (!dispatchedSession.getId().empty()) {
                 res["dispatched"] = true;
                 res["dispatchedEvId"] = dispatchedSession.getVehicleId();
                 res["dispatchedSessionId"] = dispatchedSession.getId();
-                res["message"] = "Station " + stationId + " completed. Auto-dispatched waiting vehicle " + dispatchedSession.getVehicleId() + " from FIFO queue.";
+                res["message"] = "Station " + completedSession.getStationId() + " completed. Auto-dispatched waiting vehicle " + dispatchedSession.getVehicleId() + " from FIFO queue.";
             } else {
                 res["dispatched"] = false;
             }
             return crow::response(200, res);
         } else {
             res["success"] = false;
-            res["message"] = "Could not complete charging session on station " + stationId + ". Station may not have an active session or is already available.";
+            res["message"] = compError.empty() ? ("Could not complete charging session for " + targetIdentifier) : compError;
             return crow::response(400, res);
         }
     });
